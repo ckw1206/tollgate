@@ -19,11 +19,10 @@ const nav = [
 
 const REPO = 'https://github.com/ckw1206/tollgate'
 
-const isURL = (s: string) => /^(https?:\/\/|\/)/.test(s)
-
-export function BrandIcon({ icon, size = 28 }: { icon: string; size?: number }) {
-  if (!icon || isURL(icon)) return <img src={icon || '/tollgate.png'} alt="" width={size} height={size} className="shrink-0 object-contain" />
-  return <span aria-hidden className="text-xl leading-none">{icon}</span>
+// server_icon is "" (default) or an uploaded image stored as a data URL.
+export function BrandIcon({ icon, size = 28, alt = '' }: { icon: string; size?: number; alt?: string }) {
+  const src = icon.startsWith('data:image/') ? icon : '/tollgate.png'
+  return <img src={src} alt={alt} width={size} height={size} className="shrink-0 object-contain" style={{ width: size, height: size }} />
 }
 
 type Mode = 'dark' | 'light'

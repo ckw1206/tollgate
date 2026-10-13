@@ -2,7 +2,7 @@ import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { api, ApiError, fromMicros, toMicros } from '../api'
 import { useAuth } from '../auth'
 import {
-  Badge, Button, ConfirmDialog, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, Table, useLoad,
+  Badge, Button, ConfirmDialog, controlCls, DetailPanel, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, Table, useLoad, type DetailItem,
 } from '../components/ui'
 import type { Credential, Model } from '../types'
 
@@ -29,6 +29,19 @@ const payload = (f: Form) => ({
   price_cache_read_micros: optMicros(f.price_cr), price_cache_write_micros: optMicros(f.price_cw),
   extra: JSON.parse(f.extra || '{}'),
 })
+
+const price = (micros: number | null) => (micros == null ? 'input price' : fromMicros(micros))
+
+// API base and Extra are only shown to models:write; the server redacts them for everyone else.
+function modelDetail(m: Model, writable: boolean): DetailItem[] {
+  const extra = m.extra && Object.keys(m.extra).length ? JSON.stringify(m.extra, null, 2) : null
+  return [
+    { label: 'Upstream model', value: m.upstream_model },
+    ...(writable ? [{ label: 'API base', value: m.api_base || '—' }] : []),
+    { label: 'Cache read · write $ / 1M', value: `${price(m.price_cache_read_micros)} · ${price(m.price_cache_write_micros)}` },
+    ...(writable ? [{ label: 'Extra', wide: true, value: extra ? <pre className="max-w-2xl overflow-x-auto whitespace-pre">{extra}</pre> : '—' }] : []),
+  ]
+}
 
 export default function Models() {
   const { can } = useAuth()
@@ -96,23 +109,26 @@ export default function Models() {
       <Table
         rows={rowsOf(models)}
         empty="No models yet."
+        rowKey={(m) => m.id}
+        rowLabel={(m) => m.name}
+        expand={(m) => (
+          <DetailPanel
+            items={modelDetail(m, writable)}
+            actions={writable && (
+              <RowActions>
+                <Button size="sm" variant="ghost" onClick={() => open(m)}>Edit</Button>
+                <Button size="sm" variant="ghost" onClick={() => toggle(m)}>{m.enabled ? 'Disable' : 'Enable'}</Button>
+                <Button size="sm" variant="danger" onClick={() => setDeleting(m)}>Delete</Button>
+              </RowActions>
+            )}
+          />
+        )}
         cols={[
           { head: 'Name', cell: (m) => m.name },
-          { head: 'Provider', cell: (m) => `${m.provider} · ${m.upstream_model}` },
+          { head: 'Provider', cell: (m) => m.provider }, // upstream model is in the detail row
           { head: '$ / 1M in · out', cell: (m) => `${fromMicros(m.price_input_micros)} · ${fromMicros(m.price_output_micros)}` },
           ...(writable ? [{ head: 'Credential', cell: (m: Model) => credName(m.credential_id) }] : []),
           { head: 'Status', cell: (m) => (m.enabled ? <Badge tone="success">enabled</Badge> : <Badge tone="inactive">disabled</Badge>) },
-          {
-            head: '',
-            cell: (m) =>
-              writable && (
-                <RowActions>
-                  <Button size="sm" variant="ghost" onClick={() => open(m)}>Edit</Button>
-                  <Button size="sm" variant="ghost" onClick={() => toggle(m)}>{m.enabled ? 'Disable' : 'Enable'}</Button>
-                  <Button size="sm" variant="danger" onClick={() => setDeleting(m)}>Delete</Button>
-                </RowActions>
-              ),
-          },
         ]}
       />
 

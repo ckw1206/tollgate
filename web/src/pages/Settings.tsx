@@ -1,12 +1,13 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { ICON_TYPES, iconFromFile } from '../icon'
 import { BrandIcon } from '../Layout'
-import { Button, controlCls, ErrorText, Field, inputCls, PageHeader, useLoad } from '../components/ui'
+import { Button, ErrorText, Field, inputCls, PageHeader, useLoad } from '../components/ui'
 import type { Settings as S } from '../types'
 
-// Searchable combobox over the browser's IANA zones: native <input list> + <datalist>.
-const zones = Intl.supportedValuesOf('timeZone')
+// Browsers omit UTC from their zone list, but it's the server default and a valid choice.
+const zones = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')]
 
 export default function Settings() {
   const { can, refresh } = useAuth()
@@ -14,12 +15,14 @@ export default function Settings() {
   const [form, setForm] = useState<S | null>(null)
   const [msg, setMsg] = useState('')
   const [error, setError] = useState('')
+  const [iconError, setIconError] = useState('')
   const [busy, setBusy] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (current.data) setForm(current.data)
   }, [current.data])
 
-  const ro = !can('settings:write') // read-only view: same layout, inputs disabled, no Save
+  const ro = !can('settings:write') // read-only view: same layout, inputs disabled, no Save or upload
   if (!form)
     return (
       <>
@@ -43,24 +46,57 @@ export default function Settings() {
       setBusy(false)
     }
   }
-  const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement>) => {
+  // Functional update: an icon finishes processing after an await, and must not undo
+  // edits made to other fields in the meantime.
+  const update = (patch: Partial<S>) => {
     setMsg('')
-    setForm({ ...form, [k]: e.target.value })
+    setForm((f) => f && { ...f, ...patch })
   }
+  const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => update({ [k]: e.target.value })
+
+  const pickIcon = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = '' // picking the same file again must fire change
+    if (!f) return
+    setIconError('')
+    try {
+      update({ server_icon: await iconFromFile(f) })
+    } catch (err) {
+      setIconError((err as Error).message)
+    }
+  }
+
+  // A saved zone the browser doesn't list (e.g. Etc/GMT-8, which Go accepts) stays selectable.
+  const saved = current.data?.timezone
+  const zoneOptions = saved && !zones.includes(saved) ? [saved, ...zones] : zones
   return (
     <>
       <PageHeader title="Settings" />
       <form onSubmit={save} className="max-w-[448px] space-y-4">
         <Field label="Server name"><input className={inputCls} required disabled={ro} value={form.server_name} onChange={set('server_name')} /></Field>
-        <Field label="Icon" hint="An emoji or image URL. Blank = the Tollgate icon.">
+        <div className="text-sm">
+          <span className="font-medium">Icon</span>
           <div className="mt-1 flex items-center gap-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center border border-border"><BrandIcon icon={form.server_icon} /></span>
-            <input className={controlCls + ' block min-h-9 w-full py-1 text-sm'} disabled={ro} value={form.server_icon} onChange={set('server_icon')} />
+            <span className="inline-flex shrink-0 border border-border">
+              <BrandIcon icon={form.server_icon} size={48} alt={form.server_icon ? 'Current server icon' : 'Default Tollgate icon'} />
+            </span>
+            {!ro && (
+              <>
+                <input ref={fileRef} type="file" accept={ICON_TYPES.join(',')} className="hidden" aria-label="Icon file" onChange={pickIcon} />
+                <Button type="button" variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>Upload icon…</Button>
+                <Button type="button" variant="ghost" size="sm" disabled={form.server_icon === ''} onClick={() => { setIconError(''); update({ server_icon: '' }) }}>
+                  Reset to default
+                </Button>
+              </>
+            )}
           </div>
-        </Field>
+          {!ro && <span className="mt-1 block text-xs text-muted-foreground">Square PNG, JPEG or WebP, at least 128 × 128 px, up to 256 KB. Saved with the form.</span>}
+          <div className="mt-1"><ErrorText>{iconError}</ErrorText></div>
+        </div>
         <Field label="Timezone" hint="Daily/monthly budgets reset at midnight in this timezone.">
-          <input className={inputCls} list="tz-list" required disabled={ro} value={form.timezone} onChange={set('timezone')} />
-          <datalist id="tz-list">{zones.map((z) => <option key={z} value={z} />)}</datalist>
+          <select className={inputCls} required disabled={ro} value={form.timezone} onChange={set('timezone')}>
+            {zoneOptions.map((z) => <option key={z} value={z}>{z}</option>)}
+          </select>
         </Field>
         <Field label="Currency label" hint="Display only; no conversion."><input className={inputCls} required disabled={ro} value={form.currency} onChange={set('currency')} /></Field>
         <ErrorText>{error}</ErrorText>

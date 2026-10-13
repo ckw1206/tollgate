@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
@@ -112,14 +112,48 @@ export interface Col<T> {
 }
 
 // rows === null means still loading: three skeleton rows.
-export function Table<T>({ rows, cols, empty = 'Nothing here yet.' }: { rows: T[] | null; cols: Col<T>[]; empty?: string }) {
+// With `expand`, a leading 40px chevron column is added; clicking the chevron or anywhere
+// on the row toggles a full-width detail row. Rows start collapsed and several may be open.
+// `rowKey` keeps the open set stable across reloads (defaults to the row index).
+export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowKey, rowLabel }: {
+  rows: T[] | null
+  cols: Col<T>[]
+  empty?: string
+  expand?: (row: T) => ReactNode
+  rowKey?: (row: T) => string
+  rowLabel?: (row: T) => string
+}) {
+  const [open, setOpen] = useState<Set<string>>(() => new Set())
+  // The detail panel is pinned to the visible width of the scroll container, so its
+  // actions stay on screen when the table itself is wider (narrow screens, many columns).
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [viewWidth, setViewWidth] = useState<number>()
+  const expandable = !!expand
+  // Measure before first paint (no frame at full table width), then track resizes.
+  useLayoutEffect(() => {
+    const el = wrapRef.current
+    if (!expandable || !el) return
+    setViewWidth(el.clientWidth)
+    const ro = new ResizeObserver(() => setViewWidth(el.clientWidth))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [expandable])
+  const toggle = (k: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (next.has(k)) next.delete(k)
+      else next.add(k)
+      return next
+    })
   const last = cols.length - 1
+  const span = cols.length + (expand ? 1 : 0)
   const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''}`
   return (
-    <div className="overflow-x-auto rounded-md border border-border">
+    <div ref={wrapRef} className="overflow-x-auto rounded-md border border-border">
       <table className="min-w-full text-sm">
         <thead className="bg-table-header text-left text-[13px] text-muted-foreground">
           <tr className="h-10">
+            {expand && <th className="w-10" aria-label="Expand" />}
             {cols.map((c, i) => (
               <th key={i} className="whitespace-nowrap px-3 font-medium">{c.head}</th>
             ))}
@@ -129,25 +163,81 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.' }: { rows: T[
           {rows === null &&
             [0, 1, 2].map((r) => (
               <tr key={r} className="h-11 border-t border-border">
-                {cols.map((_, i) => (
-                  <td key={i} className="px-3"><Skeleton /></td>
+                {Array.from({ length: span }, (_, i) => (
+                  <td key={i} className="px-3"><Skeleton className={expand && i === 0 ? 'h-3 w-3' : undefined} /></td>
                 ))}
               </tr>
             ))}
           {rows?.length === 0 && (
             <tr className="h-11 border-t border-border">
-              <td colSpan={cols.length} className="px-3 text-center text-muted-foreground">{empty}</td>
+              <td colSpan={span} className="px-3 text-center text-muted-foreground">{empty}</td>
             </tr>
           )}
-          {rows?.map((r, ri) => (
-            <tr key={ri} className="h-11 border-t border-border hover:bg-accent">
-              {cols.map((c, i) => (
-                <td key={i} className={cellCls(i)}>{c.cell(r)}</td>
-              ))}
-            </tr>
-          ))}
+          {rows?.map((r, ri) => {
+            const k = rowKey ? rowKey(r) : String(ri)
+            const isOpen = !!expand && open.has(k)
+            return (
+              <Fragment key={k}>
+                <tr
+                  className={`h-11 border-t border-border hover:bg-accent ${expand ? 'cursor-pointer' : ''}`}
+                  onClick={expand ? () => !window.getSelection()?.toString() && toggle(k) : undefined}
+                >
+                  {expand && (
+                    <td className="w-10 pl-2">
+                      <button
+                        type="button"
+                        aria-expanded={isOpen}
+                        aria-label={`Details${rowLabel ? ` for ${rowLabel(r)}` : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation() // the row's own click handler would toggle it back
+                          toggle(k)
+                        }}
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        {isOpen ? '▾' : '▸'}
+                      </button>
+                    </td>
+                  )}
+                  {cols.map((c, i) => (
+                    <td key={i} className={cellCls(i)}>{c.cell(r)}</td>
+                  ))}
+                </tr>
+                {isOpen && (
+                  <tr className="border-t border-border bg-muted/40">
+                    <td colSpan={span} className="p-0">
+                      <div className="sticky left-0 p-4 pl-[52px]" style={{ width: viewWidth }}>{expand!(r)}</div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+export interface DetailItem {
+  label: string
+  value: ReactNode
+  wide?: boolean // spans the full grid row (e.g. JSON)
+}
+
+// DetailPanel is the body of an expanded Table row: a label/value grid on the left
+// (12px muted label, mono 12 value) and small action buttons on the right.
+export function DetailPanel({ items, actions }: { items: DetailItem[]; actions?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-start gap-4 whitespace-normal">
+      <dl className="grid flex-[1_1_420px] grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-x-6 gap-y-3">
+        {items.map((it) => (
+          <div key={it.label} className={it.wide ? 'col-span-full' : undefined}>
+            <dt className="text-xs text-muted-foreground">{it.label}</dt>
+            <dd className="mt-1 font-mono text-xs wrap-anywhere">{it.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {actions && <div className="ml-auto">{actions}</div>}
     </div>
   )
 }

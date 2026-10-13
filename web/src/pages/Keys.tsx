@@ -3,7 +3,7 @@ import { api, short, when } from '../api'
 import { useAuth } from '../auth'
 import { budgetText, LimitsFields, limitsPayload, limitsState, limitText, type LimitsState } from '../components/LimitsFields'
 import {
-  Badge, Button, ConfirmDialog, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, SecretDialog,
+  Badge, Button, ConfirmDialog, DetailPanel, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, SecretDialog,
   Segmented, Table, useLoad, type Tone,
 } from '../components/ui'
 import type { ApiKey, Group, User } from '../types'
@@ -155,16 +155,27 @@ export default function Keys() {
       <Table
         rows={rowsOf(keys)}
         empty="No API keys yet."
+        rowKey={(k) => k.id}
+        rowLabel={(k) => k.alias}
+        expand={(k) => (
+          <DetailPanel
+            items={[
+              { label: 'Group', value: groupName(k.group_id) },
+              { label: 'Budget', value: budgetText(k) },
+              { label: 'RPM / TPM', value: `${limitText(k.rpm_limit)} / ${limitText(k.tpm_limit)}` },
+              { label: 'Allowed models', value: k.models.length ? k.models.join(', ') : 'all' },
+              { label: 'Expires', value: k.expires_at ? when(k.expires_at) : 'never' },
+              { label: 'Created', value: when(k.created_at) },
+            ]}
+            actions={actions(k)}
+          />
+        )}
         cols={[
           { head: 'Alias', cell: (k) => <div>{k.alias}{expiringSoon(k)}</div> },
           { head: 'Key', cell: (k) => <code className="font-mono text-xs">{k.key_prefix}…</code> },
           ...(can('keys:read_all') ? [{ head: 'Owner', cell: (k: ApiKey) => email(k.user_id) }] : []),
-          { head: 'Group', cell: (k) => groupName(k.group_id) },
-          { head: 'Budget', cell: (k) => budgetText(k) },
-          { head: 'RPM / TPM', cell: (k) => `${limitText(k.rpm_limit)} / ${limitText(k.tpm_limit)}` },
           { head: 'Last used', cell: (k) => when(k.last_used_at) },
           { head: 'Status', cell: (k) => <Badge tone={tone[keyStatus(k)]}>{keyStatus(k)}</Badge> },
-          { head: '', cell: actions },
         ]}
       />
 
