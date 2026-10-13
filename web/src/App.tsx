@@ -4,6 +4,7 @@ import Layout from './Layout'
 import Audit from './pages/Audit'
 import Credentials from './pages/Credentials'
 import Dashboard from './pages/Dashboard'
+import Docs from './pages/Docs'
 import Groups from './pages/Groups'
 import Invite from './pages/Invite'
 import Invites from './pages/Invites'
@@ -35,6 +36,7 @@ export default function App() {
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route index element={<Gate perm="spend:read_own"><Dashboard /></Gate>} />
             {pages.map((p) => <Route key={p.path} path={p.path} element={<Gate perm={p.perm}>{p.el}</Gate>} />)}
+            <Route path="docs" element={<Docs />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
