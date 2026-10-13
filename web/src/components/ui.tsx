@@ -16,7 +16,7 @@ export const inputCls = controlCls + ' mt-1 block min-h-9 w-full py-1 text-sm'
 type Variant = 'primary' | 'ghost' | 'danger' | 'quiet' | 'link'
 
 // quiet: outline with muted text (e.g. Hide). link: an underlined muted text button.
-export function Button({ variant = 'primary', size = 'md', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'md' | 'sm' }) {
+export function Button({ variant = 'primary', size = 'md', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'md' | 'sm' | 'row' | 'xs' }) {
   const styles = {
     primary: 'bg-primary text-primary-foreground hover:opacity-90',
     ghost: 'border border-border bg-transparent text-foreground hover:bg-accent',
@@ -24,7 +24,8 @@ export function Button({ variant = 'primary', size = 'md', className = '', ...pr
     quiet: 'border border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
     link: 'text-muted-foreground underline underline-offset-2 hover:text-foreground',
   }[variant]
-  const sizing = variant === 'link' ? 'text-[13px]' : size === 'sm' ? 'h-8 px-3 text-[13px]' : 'h-9 px-4 text-sm'
+  const sizing =
+    variant === 'link' ? 'text-[13px]' : size === 'xs' ? 'h-[26px] px-2.5 text-xs' : size === 'row' ? 'h-7 px-2.5 text-xs' : size === 'sm' ? 'h-8 px-3 text-[13px]' : 'h-9 px-4 text-sm'
   return (
     <button
       className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium disabled:pointer-events-none disabled:opacity-50 ${sizing} ${styles} ${className}`}
@@ -319,11 +320,12 @@ export function SecretDialog({ title, body, value, children, onClose }: { title:
   )
 }
 
-export function Segmented<V extends string | number>({ options, value, onChange, small = false, label }: {
+export function Segmented<V extends string | number>({ options, value, onChange, small = false, tall = false, label }: {
   options: { value: V; label: string }[]
   value: V
   onChange: (v: V) => void
   small?: boolean
+  tall?: boolean // 34px: lines up with 36px controls (e.g. the /docs language tabs)
   label: string
 }) {
   return (
@@ -337,7 +339,7 @@ export function Segmented<V extends string | number>({ options, value, onChange,
             role="radio"
             aria-checked={on}
             onClick={() => onChange(o.value)}
-            className={`${small ? 'h-6 px-2 text-[11px]' : 'h-7 px-3 text-xs'} font-medium ${on ? 'bg-primary text-primary-foreground' : 'bg-transparent hover:bg-accent'}`}
+            className={`${small ? 'h-6 px-2 text-[11px]' : tall ? 'h-[34px] px-3 text-[13px]' : 'h-7 px-3 text-xs'} font-medium ${on ? 'bg-primary text-primary-foreground' : 'bg-transparent hover:bg-accent'}`}
           >
             {o.label}
           </button>
@@ -367,3 +369,36 @@ export function useLoad<T>(path: string | null) {
 // rowsOf: loading → null (skeletons); load error with no data → [] so the table still renders.
 export const rowsOf = <T,>(l: { data: T[] | null; error: string }): T[] | null => l.data ?? (l.error ? [] : null)
 
+// CopyButton copies `value` and reads "Copied" for 1.5s.
+export function CopyButton({ value, label = 'Copy', size = 'xs', variant = 'ghost', className = '', ariaLabel }: { value: string; label?: string; size?: 'xs' | 'row' | 'sm'; variant?: Variant; className?: string; ariaLabel?: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  return (
+    <Button type="button" size={size} variant={variant} className={className} aria-label={ariaLabel} aria-live="polite" onClick={() => navigator.clipboard.writeText(value).then(() => setCopied(true), () => undefined)}>
+      {copied ? 'Copied' : label}
+    </Button>
+  )
+}
+
+// InlineCopy: a 36px labelled value with a Copy action, e.g. "Base URL | https://…/v1 | Copy".
+export function InlineCopy({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
+  return (
+    <div className="flex h-9 max-w-full items-stretch border border-input">
+      <span className="flex items-center border-r border-input px-2.5 text-xs text-muted-foreground">{label}</span>
+      <code className="flex min-w-0 items-center truncate px-2.5 font-mono text-xs">{value}</code>
+      <button type="button" onClick={() => navigator.clipboard.writeText(value).then(() => setCopied(true), () => undefined)} className="border-l border-input px-3 text-[13px] font-medium hover:bg-accent">
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  )
+}
