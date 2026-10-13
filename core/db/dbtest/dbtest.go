@@ -21,7 +21,9 @@ func New(t *testing.T) *db.DB {
 	}
 	ctx := context.Background()
 	b := make([]byte, 6)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		t.Fatalf("entropy exhausted: %v", err)
+	}
 	schema := "t_" + hex.EncodeToString(b)
 
 	admin, err := pgxpool.New(ctx, url)

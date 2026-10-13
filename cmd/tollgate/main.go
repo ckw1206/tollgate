@@ -53,6 +53,10 @@ func serve() error {
 	if err != nil {
 		return err
 	}
+	v, err := vault.New(cfg.EncryptionKey)
+	if err != nil {
+		return err
+	}
 	d, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -68,10 +72,6 @@ func serve() error {
 	defer c.Close()
 	if err := c.Ping(ctx); err != nil {
 		return fmt.Errorf("redis: %w", err)
-	}
-	v, err := vault.New(cfg.EncryptionKey)
-	if err != nil {
-		return err
 	}
 	store := repo.New(d)
 
