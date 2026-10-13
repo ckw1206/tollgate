@@ -79,7 +79,7 @@ func anthropicBody(m *llm.Model, req *llm.ChatRequest, stream bool) ([]byte, err
 func (p *Anthropic) send(ctx context.Context, m *llm.Model, body []byte) (*http.Response, error) {
 	base := m.APIBase
 	if base == "" {
-		base = "https://api.anthropic.com"
+		base = DefaultAnthropicBase
 	}
 	h := map[string]string{"x-api-key": string(m.Secret), "anthropic-version": "2023-06-01"}
 	for k, v := range m.Extra.Headers {

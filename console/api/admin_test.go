@@ -17,16 +17,16 @@ import (
 
 func TestCredentials_SecretNeverReturnedOrAudited(t *testing.T) {
 	e := newTenv(t)
-	w := e.as("admin@x.io", "POST", "/console/api/v1/credentials", map[string]string{"name": "openai-prod", "kind": "api_key", "secret": "«redacted:sk-…»"})
-	if w.Code != 201 || strings.Contains(w.Body.String(), "«redacted:sk-…»") {
+	w := e.as("admin@x.io", "POST", "/console/api/v1/credentials", map[string]string{"name": "openai-prod", "provider": "openai", "kind": "api_key", "secret": "test-very-secret-value"})
+	if w.Code != 201 || strings.Contains(w.Body.String(), "very-secret") {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
-	if list := e.as("admin@x.io", "GET", "/console/api/v1/credentials", nil).Body.String(); strings.Contains(list, "sk-very") || strings.Contains(list, "ciphertext") {
+	if list := e.as("admin@x.io", "GET", "/console/api/v1/credentials", nil).Body.String(); strings.Contains(list, "very-secret") || strings.Contains(list, "ciphertext") {
 		t.Fatalf("list leaks: %s", list)
 	}
 	entries, _, _ := e.store.ListAudit(context.Background(), repo.AuditFilter{Limit: 50})
 	for _, a := range entries {
-		if strings.Contains(string(a.Details), "sk-very") {
+		if strings.Contains(string(a.Details), "very-secret") {
 			t.Fatal("secret in audit log")
 		}
 	}

@@ -12,7 +12,7 @@ import (
 func TestModels_CRUDAndUniqueName(t *testing.T) {
 	s, _ := newStore(t)
 	ctx := context.Background()
-	cred, err := s.CreateCredential(ctx, "openai-prod", "api_key", []byte("n"), []byte("c"))
+	cred, err := s.CreateCredential(ctx, repo.CredentialInput{Name: "openai-prod", Kind: "api_key", Provider: "openai"}, []byte("n"), []byte("c"))
 	if err != nil {
 		t.Fatal(err)
 	}

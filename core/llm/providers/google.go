@@ -65,11 +65,7 @@ func (g *Google) endpoint(ctx context.Context, m *llm.Model, stream bool) (strin
 		}
 		base := m.APIBase
 		if base == "" {
-			host := loc + "-aiplatform.googleapis.com"
-			if loc == "global" {
-				host = "aiplatform.googleapis.com"
-			}
-			base = "https://" + host
+			base = vertexBase(loc)
 		}
 		tok, err := g.TokenFor(ctx, m.Secret)
 		if err != nil {
@@ -81,10 +77,17 @@ func (g *Google) endpoint(ctx context.Context, m *llm.Model, stream bool) (strin
 	}
 	base := m.APIBase
 	if base == "" {
-		base = "https://generativelanguage.googleapis.com/v1beta"
+		base = DefaultGoogleBase
 	}
 	h["x-goog-api-key"] = string(m.Secret)
 	return fmt.Sprintf("%s/models/%s:%s%s", strings.TrimRight(base, "/"), m.UpstreamModel, method, query), h, nil
+}
+
+func vertexBase(loc string) string {
+	if loc == "global" {
+		return "https://aiplatform.googleapis.com"
+	}
+	return "https://" + loc + "-aiplatform.googleapis.com"
 }
 
 func googleBody(req *llm.ChatRequest) ([]byte, error) {

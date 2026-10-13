@@ -4,7 +4,7 @@ import { useAuth } from '../auth'
 import {
   Button, ConfirmDialog, ErrorText, PageHeader, RowActions, rowsOf, Table, useLoad,
 } from '../components/ui'
-import CredentialDialog from '../components/CredentialDialog'
+import CredentialDialog, { credEndpoint, credProvider, PROVIDERS } from '../components/CredentialDialog'
 import type { Credential } from '../types'
 
 
@@ -36,7 +36,8 @@ export default function Credentials() {
         empty="No credentials yet."
         cols={[
           { head: 'Name', cell: (c) => c.name },
-          { head: 'Kind', cell: (c) => c.kind },
+          { head: 'Provider', cell: (c) => PROVIDERS[credProvider(c)].label },
+          { head: 'API endpoint', cell: (c) => <span className="font-mono text-xs">{credEndpoint(c)}</span> },
           { head: 'Created', cell: (c) => when(c.created_at) },
           { head: '', cell: (c) => writable && <RowActions><Button size="sm" variant="danger" onClick={() => setDeleting(c)}>Delete</Button></RowActions> },
         ]}

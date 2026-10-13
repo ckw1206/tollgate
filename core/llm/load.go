@@ -50,7 +50,18 @@ func LoadModels(ctx context.Context, store *repo.Store, v *vault.Vault) ([]*Mode
 				slog.Warn("skipping model: credential unavailable", "model", r.Name)
 				continue
 			}
-			m.Secret, m.CredentialKind = secret, creds[id].Kind
+			c := creds[id]
+			m.Secret, m.CredentialKind = secret, c.Kind
+			// Endpoint: model.api_base ▸ credential.api_base ▸ provider default (in the provider).
+			if m.APIBase == "" {
+				m.APIBase = c.APIBase
+			}
+			if m.Extra.VertexProject == "" {
+				m.Extra.VertexProject = c.VertexProject
+			}
+			if m.Extra.VertexLocation == "" {
+				m.Extra.VertexLocation = c.VertexLocation
+			}
 		}
 		out = append(out, m)
 	}
