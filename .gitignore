@@ -31,4 +31,8 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+/tollgate
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
 .work/
