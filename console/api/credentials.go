@@ -2,6 +2,7 @@ package consoleapi
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"tollgate/core/api"
@@ -46,6 +47,9 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
+	if err := s.Reload(r.Context()); err != nil {
+		slog.Error("credential created; registry reload failed", "err", err)
+	}
 	s.audit(r, "credential.create", "provider_credentials", c.ID, nil, c)
 	api.WriteJSON(w, 201, c)
 }
@@ -55,6 +59,9 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteCredential(r.Context(), id); err != nil {
 		storeErr(w, err) // ErrConflict → 409 while models still use it
 		return
+	}
+	if err := s.Reload(r.Context()); err != nil {
+		slog.Error("credential deleted; registry reload failed", "err", err)
 	}
 	s.audit(r, "credential.delete", "provider_credentials", id, nil, nil)
 	w.WriteHeader(204)
