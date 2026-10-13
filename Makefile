@@ -3,6 +3,7 @@
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
+TESTFLAGS ?=
 TEST_DB ?= postgres://tollgate:tollgate@localhost:5432/tollgate?sslmode=disable
 
 web:
@@ -17,4 +18,4 @@ image:
 # DB-backed tests skip silently without TOLLGATE_TEST_DATABASE_URL; `make test` always sets it,
 # so a missing Postgres fails loudly. Start it with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
 test:
-	TOLLGATE_TEST_DATABASE_URL='$(TEST_DB)' go test -count=1 ./...
+	TOLLGATE_TEST_DATABASE_URL='$(TEST_DB)' go test -count=1 $(TESTFLAGS) ./...

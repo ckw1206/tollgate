@@ -1,0 +1,172 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md", "LICENSE"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release this exact version (e.g. v1.0.0) instead of the computed one"
+        required: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tollgate
+          POSTGRES_PASSWORD: tollgate
+          POSTGRES_DB: tollgate
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26' # latest patch, like the Dockerfile's golang:1.26
+          check-latest: true
+      - run: make web
+      - run: go vet ./...
+      - run: make test TESTFLAGS=-race
+
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26' # latest patch, like the Dockerfile's golang:1.26
+          check-latest: true
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      # Rules from CLAUDE.md.
+      - name: Repo rules
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          fail=0
+          # The replaced product's name, encoded so this check doesn't trip itself.
+          banned=$(echo bGl0ZWxsbQ== | base64 -d)
+          if git grep -nIi "$banned"; then echo "::error::name of the replaced product in files"; fail=1; fi
+          if ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then BASE=; fi # first push / force-push
+          if [ -n "$BASE" ] && { git log --format='%B' "$BASE..HEAD"; echo "$PR_TITLE"; } | grep -i "$banned"; then
+            echo "::error::name of the replaced product in a commit message or PR title"; fail=1
+          fi
+          if git grep -n 'fetch(' -- web/src ':!web/src/api.ts'; then echo "::error::only api() in web/src/api.ts may call fetch"; fail=1; fi
+          if [ -n "$BASE" ] && git diff --name-only --diff-filter=MDR "$BASE" HEAD -- core/db/migrations | grep .; then
+            echo "::error::applied migrations must not be edited, renamed or deleted; add a new one"; fail=1
+          fi
+          exit $fail
+
+  release:
+    needs: [test, checks]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # First release is v0.1.0. After that: a feat or breaking commit since the last tag bumps
+      # minor, anything else bumps patch.
+      # ponytail: no automatic major bumps; release v1.0.0 via "Run workflow" with a version.
+      - name: Next version
+        id: version
+        env:
+          OVERRIDE: ${{ inputs.version }}
+        run: |
+          last=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+          if [ -n "$OVERRIDE" ]; then
+            next=$OVERRIDE
+          elif [ -z "$last" ]; then
+            next=v0.1.0
+          else
+            IFS=. read -r maj min pat <<<"${last#v}"
+            if git log --format='%s%n%b' "$last..HEAD" | grep -qE '^feat(\(.*\))?!?:|^[a-z]+(\(.*\))?!:|BREAKING CHANGE'; then
+              next="v$maj.$((min + 1)).0"
+            else
+              next="v$maj.$min.$((pat + 1))"
+            fi
+          fi
+          [[ $next =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $next"; exit 1; }
+          echo "Releasing $next (previous: ${last:-none})"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26' # latest patch, like the Dockerfile's golang:1.26
+          check-latest: true
+      - run: make web
+
+      - name: Build binaries
+        env:
+          VERSION: ${{ steps.version.outputs.next }}
+        run: |
+          mkdir -p out
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os=${target%/*} arch=${target#*/}
+            name="tollgate_${VERSION#v}_${os}_${arch}"
+            mkdir -p "build/$name"
+            GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath \
+              -ldflags "-s -w -X main.version=$VERSION -X main.commit=$GITHUB_SHA" \
+              -o "build/$name/tollgate" ./cmd/tollgate
+            cp LICENSE README.md "build/$name/"
+            tar -C build -czf "out/$name.tar.gz" "$name"
+          done
+          (cd out && sha256sum *.tar.gz > checksums.txt)
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ steps.version.outputs.next }}
+            COMMIT=${{ github.sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.next }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.next }}
+        run: gh release create "$VERSION" out/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
