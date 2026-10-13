@@ -28,18 +28,17 @@ func (c *Cache) LoginBlocked(ctx context.Context, ip, email string) (bool, error
 	return false, nil
 }
 
-// RecordLoginFailure counts a failure against both IP and email. The window
-// starts at the first failure (EXPIRE only when the counter is new).
+// RecordLoginFailure counts a failure against both IP and email, pipelining
+// INCR and EXPIRE so concurrent calls can't set the TTL from the wrong time.
 func (c *Cache) RecordLoginFailure(ctx context.Context, ip, email string) error {
 	for _, k := range loginKeys(ip, email) {
-		n, err := c.rdb.Incr(ctx, k).Result()
-		if err != nil {
+		pipe := c.rdb.Pipeline()
+		incr := pipe.Incr(ctx, k)
+		if _, err := pipe.Exec(ctx); err != nil {
 			return err
 		}
-		if n == 1 {
-			if err := c.rdb.Expire(ctx, k, LoginWindow).Err(); err != nil {
-				return err
-			}
+		if incr.Val() == 1 {
+			c.rdb.Expire(ctx, k, LoginWindow)
 		}
 	}
 	return nil
