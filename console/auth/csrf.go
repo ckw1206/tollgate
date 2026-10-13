@@ -18,7 +18,7 @@ func CSRF(baseURL string, next http.Handler) http.Handler {
 		if cookieRoute && !safe {
 			mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			origin := r.Header.Get("Origin")
-			if mt != "application/json" || r.ContentLength == 0 || (origin != "" && origin != baseURL) {
+			if mt != "application/json" || (origin != "" && origin != baseURL) {
 				api.WriteError(w, 403, "permission_error", "csrf", "cross-site request rejected")
 				return
 			}
