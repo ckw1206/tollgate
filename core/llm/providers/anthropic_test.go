@@ -56,7 +56,9 @@ func TestAnthropic_Chat_TranslatesBothWays(t *testing.T) {
 			FinishReason string `json:"finish_reason"`
 			Message      struct{ Content string }
 		}
-		Usage struct{ PromptTokens int64 `json:"prompt_tokens"` }
+		Usage struct {
+			PromptTokens int64 `json:"prompt_tokens"`
+		}
 	}
 	json.Unmarshal(res.Body, &out)
 	if out.Model != "claude" || out.Choices[0].Message.Content != "hello" || out.Choices[0].FinishReason != "length" || out.Usage.PromptTokens != 115 {

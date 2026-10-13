@@ -49,14 +49,16 @@ func ParseChatRequest(body []byte) (*ChatRequest, error) {
 		return nil, fmt.Errorf("invalid JSON body: %w", err)
 	}
 	var w struct {
-		Model               string        `json:"model"`
-		Stream              bool          `json:"stream"`
-		StreamOptions       *struct{ IncludeUsage bool `json:"include_usage"` } `json:"stream_options"`
-		Messages            []wireMessage `json:"messages"`
-		Temperature         *float64      `json:"temperature"`
-		TopP                *float64      `json:"top_p"`
-		MaxTokens           *int          `json:"max_tokens"`
-		MaxCompletionTokens *int          `json:"max_completion_tokens"`
+		Model         string `json:"model"`
+		Stream        bool   `json:"stream"`
+		StreamOptions *struct {
+			IncludeUsage bool `json:"include_usage"`
+		} `json:"stream_options"`
+		Messages            []wireMessage   `json:"messages"`
+		Temperature         *float64        `json:"temperature"`
+		TopP                *float64        `json:"top_p"`
+		MaxTokens           *int            `json:"max_tokens"`
+		MaxCompletionTokens *int            `json:"max_completion_tokens"`
 		Stop                json.RawMessage `json:"stop"`
 	}
 	if err := json.Unmarshal(body, &w); err != nil {
