@@ -22,7 +22,7 @@ services:
     environment:
       DATABASE_URL: postgres://tollgate:tollgate@postgres:5432/tollgate?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-    ports: ["4000:4000"]
+    ports: ["${PORT:-4000}:${PORT:-4000}"] # PORT from .env: the app listens on it inside the container too
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_started }
