@@ -36,3 +36,6 @@ web/node_modules/
 web/dist/*
 !web/dist/.gitkeep
 .work/
+
+# Local planning docs
+docs/superpowers/

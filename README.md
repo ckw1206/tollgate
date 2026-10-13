@@ -53,6 +53,7 @@ See [.env.example](.env.example). `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` 
 - Put it behind a TLS-terminating reverse proxy and set `BASE_URL` to the public `https://` URL. Set `TRUSTED_PROXIES` to the proxy's CIDR so client IPs in the audit log and login throttling are real.
 - Back up Postgres **and** `ENCRYPTION_KEY`. Losing the key means re-entering provider credentials. Nothing else is affected.
 - Single instance only: the model registry and spend buffer live in process.
+- Backups, key rotation, upgrades, and log alerts: [docs/operations.md](docs/operations.md).
 
 ## Limits (v1)
 
@@ -68,8 +69,6 @@ go test -count=1 ./...
 ```
 
 Without `TOLLGATE_TEST_DATABASE_URL`, the database-backed tests **skip** and the run still reports `ok`.
-
-Design and implementation plan: [docs/superpowers/](docs/superpowers/).
 
 ## License
 
