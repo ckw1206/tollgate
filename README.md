@@ -8,7 +8,7 @@ Requires Docker.
 
 ```bash
 cp .env.example .env
-sed -i '' "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env   # Linux: sed -i
+sed -i.bak "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env && rm .env.bak   # GNU and BSD/macOS sed
 VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 until curl -sf localhost:4000/health >/dev/null; do sleep 1; done
 docker compose logs tollgate | grep 'First-run setup'   # one-time link to create the first admin
@@ -22,8 +22,8 @@ Over plain `http` on anything other than `localhost` (and in Safari even on loca
 
 Then, as admin:
 
-1. **Credentials**: add a provider API key, or a GCP service-account JSON for Vertex.
-2. **Models**: add a model. Give it the name clients will send, the provider's model ID, the credential, and prices in USD per 1M tokens.
+1. **Credentials**: pick the provider, check the API endpoint (prefilled with the provider default; point it at any OpenAI-compatible server), and add its API key, or a GCP service-account JSON for Vertex. **Test connection** lists the upstream's models without saving.
+2. **Models**: add a model. Give it the name clients will send, the provider's model ID, the credential (its endpoint is used unless the model sets its own API base), and prices in USD per 1M tokens.
 3. **API keys**: create a key and copy it.
 
 ```bash

@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { api, ApiError, fromMicros, toMicros } from '../api'
 import type { Credential, Model } from '../types'
+import { credProvider, PROVIDERS } from './CredentialDialog'
 import { Button, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
 
 // ModelDialog: "Add model" / "Edit" dialog, shared by the Models page and the Dashboard checklist.
@@ -79,18 +80,21 @@ export default function ModelDialog({ model, creds, onClose, onSaved }: {
           <Field label="Credential">
             <select className={inputCls} value={form.credential_id} onChange={set('credential_id')}>
               <option value="">None</option>
-              {creds.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.kind})</option>)}
+              {/* The server rejects a credential made for another provider. */}
+              {creds.filter((c) => c.provider === form.provider || c.id === form.credential_id).map((c) => (
+                <option key={c.id} value={c.id}>{c.name} ({PROVIDERS[credProvider(c)].label})</option>
+              ))}
             </select>
           </Field>
         </div>
-        <Field label="API base" hint="Optional. Self-hosted, Azure, or Vertex endpoint override."><input className={inputCls} value={form.api_base} onChange={set('api_base')} /></Field>
+        <Field label="API base" hint="Blank = credential's endpoint"><input className={inputCls} value={form.api_base} onChange={set('api_base')} /></Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Input $ / 1M"><input className={inputCls} type="number" min="0" step="any" required value={form.price_in} onChange={set('price_in')} /></Field>
           <Field label="Output $ / 1M"><input className={inputCls} type="number" min="0" step="any" required value={form.price_out} onChange={set('price_out')} /></Field>
           <Field label="Cache read $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cr} onChange={set('price_cr')} /></Field>
           <Field label="Cache write $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cw} onChange={set('price_cw')} /></Field>
         </div>
-        <Field label="Extra (JSON)" hint='e.g. {"vertex_project":"p","vertex_location":"us-east5","headers":{"X-Org":"me"}}'>
+        <Field label="Extra (JSON)" hint='e.g. {"headers":{"X-Org":"me"}}. vertex_project / vertex_location override the credential.'>
           <textarea className={controlCls + ' mt-1 block h-24 w-full py-1 font-mono text-xs'} value={form.extra} onChange={set('extra')} />
         </Field>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.enabled} onChange={set('enabled')} /> Enabled</label>

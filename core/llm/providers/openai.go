@@ -18,7 +18,7 @@ type OpenAI struct {
 func (p *OpenAI) url(m *llm.Model, path string) string {
 	base := m.APIBase
 	if base == "" {
-		base = "https://api.openai.com/v1"
+		base = DefaultOpenAIBase
 	}
 	return strings.TrimRight(base, "/") + path
 }

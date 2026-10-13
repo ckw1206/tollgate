@@ -60,7 +60,19 @@ export interface Credential {
   id: string
   name: string
   kind: 'api_key' | 'gcp_service_account'
+  provider: Model['provider']
+  api_base: string // '' = provider default
+  vertex_project: string
+  vertex_location: string
   created_at: string
+}
+
+export interface CredentialTest {
+  ok: boolean
+  status: number // 0 = unreachable or timed out
+  model_count: number
+  latency_ms: number
+  message: string
 }
 
 export interface Invite {

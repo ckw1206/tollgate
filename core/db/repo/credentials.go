@@ -8,27 +8,37 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// CredentialInput is everything about a credential except its secret.
+type CredentialInput struct {
+	Name           string `json:"name"`
+	Kind           string `json:"kind"`     // api_key | gcp_service_account
+	Provider       string `json:"provider"` // openai | anthropic | google
+	APIBase        string `json:"api_base"` // "" = provider default
+	VertexProject  string `json:"vertex_project"`
+	VertexLocation string `json:"vertex_location"`
+}
+
 type Credential struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	Kind       string    `json:"kind"`
+	ID string `json:"id"`
+	CredentialInput
 	Ciphertext []byte    `json:"-"`
 	Nonce      []byte    `json:"-"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-const credCols = `id, name, kind, ciphertext, nonce, created_at`
+const credCols = `id, name, kind, provider, api_base, vertex_project, vertex_location, ciphertext, nonce, created_at`
 
 func scanCred(r scanner) (*Credential, error) {
 	var c Credential
-	err := r.Scan(&c.ID, &c.Name, &c.Kind, &c.Ciphertext, &c.Nonce, &c.CreatedAt)
+	err := r.Scan(&c.ID, &c.Name, &c.Kind, &c.Provider, &c.APIBase, &c.VertexProject, &c.VertexLocation, &c.Ciphertext, &c.Nonce, &c.CreatedAt)
 	return &c, notFound(err)
 }
 
-func (s *Store) CreateCredential(ctx context.Context, name, kind string, nonce, ct []byte) (*Credential, error) {
+func (s *Store) CreateCredential(ctx context.Context, in CredentialInput, nonce, ct []byte) (*Credential, error) {
 	c, err := scanCred(s.pool.QueryRow(ctx, `
-		INSERT INTO provider_credentials (name, kind, nonce, ciphertext) VALUES ($1, $2, $3, $4) RETURNING `+credCols,
-		name, kind, nonce, ct))
+		INSERT INTO provider_credentials (name, kind, provider, api_base, vertex_project, vertex_location, nonce, ciphertext)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING `+credCols,
+		in.Name, in.Kind, in.Provider, in.APIBase, in.VertexProject, in.VertexLocation, nonce, ct))
 	return c, conflict(err)
 }
 

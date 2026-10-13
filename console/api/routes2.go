@@ -12,6 +12,7 @@ func (s *Server) extraRoutes() map[string]http.Handler {
 		"GET " + p + "/credentials":         req(rbac.ModelsWrite, s.listCredentials),
 		"POST " + p + "/credentials":        req(rbac.ModelsWrite, s.createCredential),
 		"DELETE " + p + "/credentials/{id}": req(rbac.ModelsWrite, s.deleteCredential),
+		"POST " + p + "/credentials/test":   req(rbac.ModelsWrite, s.testCredential),
 		"GET " + p + "/models":              req(rbac.ModelsRead, s.listModels),
 		"POST " + p + "/models":             req(rbac.ModelsWrite, s.createModel),
 		"PUT " + p + "/models/{id}":         req(rbac.ModelsWrite, s.updateModel),
