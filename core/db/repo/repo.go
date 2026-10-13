@@ -2,6 +2,7 @@
 package repo
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -27,6 +28,8 @@ type Store struct {
 }
 
 func New(d *db.DB) *Store { return &Store{pool: d.Pool} }
+
+func (s *Store) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 
 // Limits is shared by groups and API keys.
 type Limits struct {
