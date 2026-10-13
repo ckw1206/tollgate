@@ -24,6 +24,8 @@ import (
 	"tollgate/core/llm/providers"
 	"tollgate/core/spend"
 	"tollgate/core/vault"
+	"tollgate/console/auth"
+	consoleapi "tollgate/console/api"
 	"tollgate/core/worker"
 )
 
@@ -111,10 +113,12 @@ func serve() error {
 
 	mux := http.NewServeMux()
 	(&api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}).Register(mux)
-	// Task 16 registers the console API here; Task 17 mounts the SPA.
+	(&consoleapi.Server{Store: store, Cache: c, Vault: v, Reload: reload, BaseURL: cfg.BaseURL, TrustedProxies: cfg.TrustedProxies,
+		Sessions: &auth.Sessions{Cache: c, Store: store, Insecure: cfg.CookieInsecure, TTL: 24 * time.Hour}}).Register(mux)
+	// Task 17 mounts the SPA here.
 
 	// No WriteTimeout: streams can run for minutes.
-	srv := &http.Server{Addr: cfg.Addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: auth.CSRF(cfg.BaseURL, mux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
 		slog.Info("listening", "addr", cfg.Addr)
