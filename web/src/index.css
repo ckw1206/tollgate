@@ -1,0 +1,73 @@
+@import "tailwindcss";
+@import "./styles/alison.css";
+
+/* Map Tailwind utilities onto Alison UI tokens (bg-background, text-muted-foreground, border-border, …). */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-table-header: var(--data-table-header-bg);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-error: var(--error);
+  --color-error-foreground: var(--error-foreground);
+  --color-inactive: var(--inactive);
+  --color-inactive-foreground: var(--inactive-foreground);
+  --font-sans: 'Geist', sans-serif;
+  --font-mono: 'Geist Mono', monospace;
+  --shadow-dialog: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+}
+
+/* Mira's light tokens are tuned for dark surfaces (near-white primary, translucent-white
+   borders and muted). Restore readable light values; the handover's fix only covered
+   --card and --data-table-header-bg. */
+[data-mode='light'][data-theme='mira'] {
+  --card: var(--background);
+  --data-table-header-bg: var(--muted);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.87 0 0);
+  --muted: oklch(0.97 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+}
+
+[data-mode='dark'] {
+  color-scheme: dark; /* native selects, date pickers and datalists follow the theme */
+}
+[data-mode='light'] {
+  color-scheme: light;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border); /* Tailwind v4 defaults borders to currentColor */
+  }
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}

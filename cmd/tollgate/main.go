@@ -15,6 +15,8 @@ import (
 
 	"golang.org/x/term"
 
+	consoleapi "tollgate/console/api"
+	"tollgate/console/auth"
 	"tollgate/core/api"
 	"tollgate/core/cache"
 	"tollgate/core/config"
@@ -24,10 +26,12 @@ import (
 	"tollgate/core/llm/providers"
 	"tollgate/core/spend"
 	"tollgate/core/vault"
-	"tollgate/console/auth"
-	consoleapi "tollgate/console/api"
 	"tollgate/core/worker"
+	"tollgate/web"
 )
+
+// Set at build time: -ldflags "-X main.version=v1.2.3 -X main.commit=<sha>".
+var version, commit = "dev", ""
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -114,8 +118,9 @@ func serve() error {
 	mux := http.NewServeMux()
 	(&api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}).Register(mux)
 	(&consoleapi.Server{Store: store, Cache: c, Vault: v, Reload: reload, BaseURL: cfg.BaseURL, TrustedProxies: cfg.TrustedProxies,
+		Version: version, Commit: commit,
 		Sessions: &auth.Sessions{Cache: c, Store: store, Insecure: cfg.CookieInsecure, TTL: 24 * time.Hour}}).Register(mux)
-	// Task 17 mounts the SPA here.
+	mux.Handle("GET /", web.Handler(web.Dist())) // console SPA; API routes above take precedence
 
 	// No WriteTimeout: streams can run for minutes.
 	srv := &http.Server{Addr: cfg.Addr, Handler: auth.CSRF(cfg.BaseURL, mux), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second}

@@ -7,8 +7,28 @@ services:
       POSTGRES_DB: tollgate
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "tollgate", "-d", "tollgate"]
+      interval: 2s
+      retries: 30
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+  tollgate:
+    build:
+      context: .
+      args: [VERSION, COMMIT] # from the shell env; unset = the Dockerfile defaults (dev)
+    env_file:
+      - path: .env
+        required: false # so `docker compose up -d postgres redis` works before .env exists
+    environment:
+      DATABASE_URL: postgres://tollgate:tollgate@postgres:5432/tollgate?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+    ports: ["4000:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+    restart: unless-stopped
+    stop_grace_period: 45s # shutdown waits up to 30s for streams, then flushes spend
 volumes:
   pgdata:

@@ -1,0 +1,360 @@
+/* ============================================================
+ * Alison UI Design System — global stylesheet
+ * Mirrored 1:1 from the monorepo source of truth:
+ *   packages/alison-ui/src/styles/fonts/fonts.css   (fonts)
+ *   packages/alison-ui/src/styles/theme.css         (color + radius + font tokens)
+ *
+ * The source authors these with Tailwind v4 (@import 'tailwindcss',
+ * @theme inline, @apply). Those directives can't run in the plain-CSS
+ * design-system compiler, so this file reproduces ONLY the underlying
+ * token definitions (the CSS custom properties + @font-face) verbatim,
+ * plus the Tailwind v4 default palette shades the tokens reference
+ * (e.g. --success: var(--color-emerald-50)) so everything resolves.
+ *
+ * Theme attributes (same as source): [data-mode='light'|'dark'] and
+ * [data-theme='mira']. Do not hand-edit token values here — change them
+ * in alison-ui/src/styles/theme.css and re-import.
+ * ============================================================ */
+
+/* ---------------- Fonts (fonts.css) ---------------- */
+@font-face {
+  font-family: 'Geist';
+  src: url('fonts/GeistVF.woff') format('woff');
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('fonts/GeistMonoVF.woff') format('woff');
+  font-weight: 100 900; font-style: normal; font-display: swap;
+}
+/* Tollgate: Geist Pixel @font-face removed (unused by the console). */
+
+/* ============================================================
+ * DEFAULT THEME — LIGHT (ultimate fallback for all tokens)
+ * [data-mode='light'] forces light tokens on any subtree
+ * ============================================================ */
+:root,
+[data-mode='light'] {
+  /* Tailwind v4 default palette — referenced by the semantic tokens below */
+  --color-blue-50: oklch(0.97 0.014 254.604);
+  --color-blue-300: oklch(0.809 0.105 251.813);
+  --color-blue-400: oklch(0.707 0.165 254.624);
+  --color-blue-600: oklch(0.546 0.245 262.881);
+  --color-emerald-50: oklch(0.979 0.021 166.113);
+  --color-emerald-300: oklch(0.845 0.143 164.978);
+  --color-emerald-600: oklch(0.596 0.145 163.225);
+  --color-amber-50: oklch(0.987 0.022 95.277);
+  --color-amber-300: oklch(0.879 0.169 91.605);
+  --color-amber-600: oklch(0.666 0.179 58.318);
+  --color-red-50: oklch(0.971 0.013 17.38);
+  --color-red-300: oklch(0.808 0.114 19.571);
+  --color-red-600: oklch(0.577 0.245 27.325);
+  --color-slate-50: oklch(0.984 0.003 247.858);
+  --color-slate-400: oklch(0.704 0.04 256.788);
+  --color-slate-500: oklch(0.554 0.046 257.417);
+  --color-violet-50: oklch(0.969 0.016 293.756);
+  --color-violet-300: oklch(0.811 0.111 293.571);
+  --color-violet-500: oklch(0.606 0.25 292.717);
+  --color-pink-50: oklch(0.971 0.014 343.198);
+  --color-pink-300: oklch(0.823 0.12 346.018);
+  --color-pink-500: oklch(0.656 0.241 354.308);
+  --color-orange-50: oklch(0.98 0.016 73.684);
+  --color-orange-300: oklch(0.837 0.128 66.29);
+  --color-orange-500: oklch(0.705 0.213 47.604);
+  --color-teal-50: oklch(0.984 0.014 180.72);
+  --color-teal-300: oklch(0.855 0.138 181.071);
+  --color-teal-500: oklch(0.704 0.14 182.503);
+  --color-sky-50: oklch(0.977 0.013 236.62);
+  --color-sky-300: oklch(0.828 0.111 230.318);
+  --color-sky-500: oklch(0.685 0.169 237.323);
+  --color-lime-50: oklch(0.986 0.031 120.757);
+  --color-lime-300: oklch(0.897 0.196 126.665);
+  --color-lime-600: oklch(0.648 0.2 131.684);
+  --color-indigo-50: oklch(0.962 0.018 272.314);
+  --color-indigo-300: oklch(0.785 0.115 274.713);
+  --color-indigo-500: oklch(0.585 0.233 277.117);
+  --color-fuchsia-50: oklch(0.977 0.017 320.058);
+  --color-fuchsia-300: oklch(0.833 0.145 321.434);
+  --color-fuchsia-500: oklch(0.667 0.295 322.15);
+  --color-rose-500: oklch(0.645 0.246 16.439);
+
+  /* radius scale */
+  --radius-xs: 0.125rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+  --radius-3xl: 1.5rem;
+  --radius-4xl: 2rem;
+  --radius-full: 9999px;
+
+  /* radius-force scale — theme-independent radii Mira does NOT zero out (IE-2611/IE-2667) */
+  --radius-force-xs: 0.125rem;
+  --radius-force-sm: 0.25rem;
+  --radius-force-md: 0.375rem;
+  --radius-force-lg: 0.5rem;
+  --radius-force-xl: 0.75rem;
+  --radius-force-2xl: 1rem;
+  --radius-force-3xl: 1.5rem;
+  --radius-force-4xl: 2rem;
+
+  /* legacy aliases (pre-IE-2611 names) — kept so older preview pages keep rendering */
+  --rounding-md: var(--radius-force-lg);
+  --rounding-4xl: var(--radius-force-4xl);
+  --radius-rounding-md: var(--rounding-md);
+  --radius-rounding-4xl: var(--rounding-4xl);
+
+  /* z-index tokens */
+  --z-index-below: -1;
+  --z-index-above: 1;
+  --z-index-sticky: 10;
+  --z-index-popover: 50;
+  --z-index-tooltip: 50;
+  --z-index-dialog: 50;
+  --z-index-header: 101;
+  --z-index-footer: 102;
+  --z-index-modal: 103;
+
+  /* font tokens (from @theme inline, resolved) */
+  --font-sans-base: 'Geist', sans-serif;
+  --font-serif-base: 'Georgia', serif;
+  --font-sans: var(--font-sans-base);
+  --font-serif: var(--font-serif-base);
+  --font-mono: 'Geist Mono', monospace;
+  --font-roman: 'Times New Roman', system-ui;
+  --font-georgia: 'Georgia', serif;
+  --font-pixel: 'Geist Pixel', monospace;
+
+  /* core surface + text */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --tooltip: var(--muted-foreground);
+  --tooltip-foreground: var(--primary-foreground);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.922 0 0);
+  --border-filter-selected: oklch(0.2046 0 0 / 50%);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  /* charts */
+  --chart-1: oklch(0.705 0.187 47.604);
+  --chart-2: oklch(0.704 0.123 182.503);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+
+  /* sidebar */
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-sheet: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-content: oklch(1 0 0);
+  --data-table-header-bg: oklch(1 0 0);
+
+  /* custom token colors */
+  --primary-highlight: rgba(238, 242, 255, 1);
+  --primary-highlight-foreground: rgba(90, 127, 255, 1);
+  --link: var(--color-blue-50);
+  --link-foreground: var(--color-blue-400);
+  --success: var(--color-emerald-50);
+  --success-foreground: var(--color-emerald-600);
+  --in-progress: var(--color-blue-50);
+  --in-progress-foreground: var(--color-blue-600);
+  --info: var(--color-blue-50);
+  --info-foreground: var(--color-blue-600);
+  --warning: var(--color-amber-50);
+  --warning-foreground: var(--color-amber-600);
+  --error: var(--color-red-50);
+  --error-foreground: var(--color-red-600);
+  --inactive: var(--color-slate-50);
+  --inactive-foreground: var(--color-slate-500);
+  --controller: rgba(238, 242, 255, 1);
+  --controller-foreground: rgba(90, 127, 255, 1);
+
+  /* custom alison colors */
+  --alison-violet: var(--color-violet-50);
+  --alison-violet-foreground: var(--color-violet-500);
+  --alison-pink: var(--color-pink-50);
+  --alison-pink-foreground: var(--color-pink-500);
+  --alison-orange: var(--color-orange-50);
+  --alison-orange-foreground: var(--color-orange-500);
+  --alison-teal: var(--color-teal-50);
+  --alison-teal-foreground: var(--color-teal-500);
+  --alison-sky: var(--color-sky-50);
+  --alison-sky-foreground: var(--color-sky-500);
+  --alison-lime: var(--color-lime-50);
+  --alison-lime-foreground: var(--color-lime-600);
+  --alison-indigo: var(--color-indigo-50);
+  --alison-indigo-foreground: var(--color-indigo-500);
+  --alison-fuchsia: var(--color-fuchsia-50);
+  --alison-fuchsia-foreground: var(--color-fuchsia-500);
+  --alison-rose-foreground: var(--color-rose-500);
+
+  /* fixed brand ramp (from @theme inline) */
+  --primary-green-300: rgba(240, 246, 175, 1);
+  --primary-blue-50: rgba(238, 242, 255, 1);
+  --primary-blue-100: rgba(218, 226, 255, 1);
+  --primary-blue-200: rgba(189, 204, 255, 1);
+  --primary-blue-300: rgba(144, 172, 255, 1);
+  --primary-blue-400: rgba(90, 127, 255, 1);
+  --primary-blue-500: rgba(53, 84, 252, 1);
+  --primary-blue-600: rgba(31, 50, 241, 1);
+  --primary-blue-700: rgba(23, 30, 222, 1);
+  --primary-blue-800: rgba(25, 27, 180, 1);
+  --primary-blue-900: rgba(26, 30, 142, 1);
+  --primary-blue-950: rgba(21, 21, 86, 1);
+}
+
+/* ============================================================
+ * DEFAULT THEME — DARK
+ * ============================================================ */
+[data-mode='dark'] {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --tooltip: var(--muted-foreground);
+  --tooltip-foreground: var(--primary-foreground);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-filter-selected: oklch(0.9219 0 0 / 50%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.758 0.159 55.934);
+  --chart-2: oklch(0.785 0.133 181.912);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: rgba(10, 10, 10, 1);
+  --sidebar-sheet: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-content: #161616;
+  --data-table-header-bg: #161616;
+
+  /* custom token colors */
+  --primary-highlight: rgba(53, 84, 252, 0.3);
+  --primary-highlight-foreground: rgba(90, 127, 255, 1);
+  --link: rgba(53, 84, 252, 0.3);
+  --link-foreground: var(--color-blue-300);
+  --success: rgba(5, 150, 105, 0.3);
+  --success-foreground: var(--color-emerald-300);
+  --in-progress: rgba(37, 99, 235, 0.3);
+  --in-progress-foreground: var(--color-blue-300);
+  --info: rgba(37, 99, 235, 0.3);
+  --info-foreground: var(--color-blue-300);
+  --warning: rgba(217, 119, 6, 0.3);
+  --warning-foreground: var(--color-amber-300);
+  --error: rgba(220, 38, 38, 0.3);
+  --error-foreground: var(--color-red-300);
+  --inactive: rgba(100, 116, 139, 0.3);
+  --inactive-foreground: var(--color-slate-400);
+  --controller: rgba(255, 255, 255, 0.1);
+  --controller-foreground: var(--foreground);
+
+  /* custom alison colors */
+  --alison-violet: rgba(168, 85, 247, 0.3);
+  --alison-violet-foreground: var(--color-violet-300);
+  --alison-pink: rgba(236, 72, 153, 0.3);
+  --alison-pink-foreground: var(--color-pink-300);
+  --alison-orange: rgba(249, 115, 22, 0.3);
+  --alison-orange-foreground: var(--color-orange-300);
+  --alison-teal: rgba(20, 184, 166, 0.3);
+  --alison-teal-foreground: var(--color-teal-300);
+  --alison-sky: rgba(14, 165, 233, 0.3);
+  --alison-sky-foreground: var(--color-sky-300);
+  --alison-lime: rgba(132, 204, 22, 0.3);
+  --alison-lime-foreground: var(--color-lime-300);
+  --alison-indigo: rgba(99, 102, 241, 0.3);
+  --alison-indigo-foreground: var(--color-indigo-300);
+  --alison-fuchsia: rgba(217, 70, 239, 0.3);
+  --alison-fuchsia-foreground: var(--color-fuchsia-300);
+}
+
+/* ============================================================
+ * MIRA THEME — LIGHT
+ * Only tokens that differ from the default light theme.
+ * ============================================================ */
+[data-theme='mira'] {
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+  --stepper-indicator-radius: 0px;
+  --font-serif-base: 'Geist', sans-serif;
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: #0a0a0a;
+  --card: rgba(23, 23, 23, 0.95);
+  --border: rgba(255, 255, 255, 0.15);
+  --muted: rgba(255, 255, 255, 0.12);
+  --controller: rgba(255, 255, 255, 0.1);
+  --controller-foreground: #ddea4d;
+  --primary-highlight: rgba(255, 255, 255, 0.1);
+  --primary-highlight-foreground: #ddea4d;
+  --link-foreground: var(--primary);
+  --sidebar: transparent;
+  --sidebar-content: transparent;
+  --data-table-header-bg: rgba(10, 10, 10, 0.85);
+}
+
+/* ============================================================
+ * MIRA THEME — DARK
+ * Only tokens that differ from the default dark theme.
+ * ============================================================ */
+[data-mode='dark'][data-theme='mira'] {
+  --primary: #ddea4d;
+  --border: #404040;
+  --input: #404040;
+  --accent: rgba(99, 105, 35, 0.3);
+  --accent-foreground: oklch(0.985 0 0);
+  --sidebar-accent: rgba(99, 105, 35, 0.3);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --controller-foreground: #ddea4d;
+  --primary-highlight: rgba(221, 234, 77, 0.2);
+  --primary-highlight-foreground: #ddea4d;
+  --primary-highlight-background: rgba(99, 105, 35, 0.3);
+  --link-foreground: var(--primary);
+  --sidebar: transparent;
+  --sidebar-content: transparent;
+  --sidebar-primary: #ddea4d;
+  --data-table-header-bg: rgba(10, 10, 10, 0.85);
+}
