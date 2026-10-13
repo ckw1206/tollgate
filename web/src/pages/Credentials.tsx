@@ -13,6 +13,7 @@ export default function Credentials() {
   const writable = can('models:write')
   const creds = useLoad<Credential[]>('/console/api/v1/credentials')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Credential | null>(null)
   const [deleting, setDeleting] = useState<Credential | null>(null)
 
   const remove = (c: Credential) =>
@@ -26,7 +27,7 @@ export default function Credentials() {
     <>
       <PageHeader
         title="Credentials"
-        description="Secrets are encrypted at rest and can't be viewed again. To rotate, add a new credential and repoint models."
+        description="Secrets are encrypted at rest and can't be viewed again. To rotate, edit the credential and paste the new secret."
       >
         {writable && <Button onClick={() => setOpen(true)}>Add credential</Button>}
       </PageHeader>
@@ -39,7 +40,12 @@ export default function Credentials() {
           { head: 'Provider', cell: (c) => PROVIDERS[credProvider(c)].label },
           { head: 'API endpoint', cell: (c) => <span className="font-mono text-xs">{credEndpoint(c)}</span> },
           { head: 'Created', cell: (c) => when(c.created_at) },
-          { head: '', cell: (c) => writable && <RowActions><Button size="sm" variant="danger" onClick={() => setDeleting(c)}>Delete</Button></RowActions> },
+          { head: '', cell: (c) => writable && (
+            <RowActions>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>Edit</Button>
+              <Button size="sm" variant="danger" onClick={() => setDeleting(c)}>Delete</Button>
+            </RowActions>
+          ) },
         ]}
       />
       {open && (
@@ -47,6 +53,16 @@ export default function Credentials() {
           onClose={() => setOpen(false)}
           onSaved={() => {
             setOpen(false)
+            creds.reload()
+          }}
+        />
+      )}
+      {editing && (
+        <CredentialDialog
+          credential={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
             creds.reload()
           }}
         />

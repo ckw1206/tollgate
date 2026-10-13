@@ -1,17 +1,17 @@
-import { useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent } from 'react'
 import { api } from '../api'
-import type { ApiKey, Group } from '../types'
+import type { ApiKey, Group, Model } from '../types'
 import { LimitsFields, limitsPayload, limitsState, type LimitsState } from './LimitsFields'
-import { Button, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
+import { Button, ErrorText, Field, inputCls, Modal, ModalFooter, MultiSelect, useLoad } from './ui'
 
 // KeyDialog: "New API key" / "Edit" dialog, shared by the Keys page and the Dashboard checklist.
 // On create, onSaved receives the raw key; the caller shows it once in a SecretDialog.
 
-interface Form { alias: string; models: string; expires: string; group_id: string; limits: LimitsState }
+interface Form { alias: string; models: string[]; expires: string; group_id: string; limits: LimitsState }
 
 const emptyForm = (k?: ApiKey): Form => ({
   alias: k?.alias ?? '',
-  models: k?.models.join(', ') ?? '',
+  models: k?.models ?? [], // [] = all models
   expires: k?.expires_at ? toDateInput(k.expires_at) : '',
   group_id: k?.group_id ?? '',
   limits: limitsState(k),
@@ -34,12 +34,17 @@ export default function KeyDialog({ apiKey, groups, canBillingGroup, onClose, on
   const [form, setForm] = useState<Form>(() => emptyForm(apiKey === 'new' ? undefined : apiKey))
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const modelsLabel = useId()
+  const models = useLoad<Model[]>('/console/api/v1/models')
+  const enabled = (models.data ?? []).filter((m) => m.enabled).sort((a, b) => a.name.localeCompare(b.name))
+  // Picks that are no longer enabled models (deleted, renamed or disabled). Unknown until loaded.
+  const stale = models.data ? form.models.filter((n) => !enabled.some((m) => m.name === n)) : []
 
   const save = async (e: FormEvent) => {
     e.preventDefault()
     const body = {
       alias: form.alias,
-      models: form.models.split(',').map((s) => s.trim()).filter(Boolean),
+      models: form.models,
       expires_at: form.expires ? new Date(form.expires + 'T23:59:59').toISOString() : null,
       group_id: form.group_id || undefined,
       ...limitsPayload(form.limits),
@@ -59,9 +64,20 @@ export default function KeyDialog({ apiKey, groups, canBillingGroup, onClose, on
     <Modal title={apiKey === 'new' ? 'New API key' : `Edit "${apiKey.alias}"`} onClose={onClose}>
       <form onSubmit={save} className="space-y-4">
         <Field label="Alias"><input className={inputCls} required value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} /></Field>
-        <Field label="Allowed models" hint="Comma-separated model names. Blank = all models.">
-          <input className={inputCls} value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} />
-        </Field>
+        {/* Not a <Field>: a wrapping <label> would forward clicks to the first chip's × button. */}
+        <div className="text-sm">
+          <span id={modelsLabel} className="font-medium">Allowed models</span>
+          <MultiSelect
+            labelledBy={modelsLabel}
+            options={enabled.map((m) => ({ id: m.name, label: m.name, meta: m.provider }))}
+            value={form.models}
+            onChange={(v) => setForm({ ...form, models: v })}
+            allLabel="All models"
+            allHint={models.data ? `${enabled.length} enabled, incl. future ones` : undefined}
+            staleIds={stale}
+          />
+          <ErrorText>{models.error}</ErrorText>
+        </div>
         {canBillingGroup && (
           <Field label="Billing group">
             <select className={inputCls} value={form.group_id} onChange={(e) => setForm({ ...form, group_id: e.target.value })}>

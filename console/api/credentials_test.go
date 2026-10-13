@@ -118,3 +118,96 @@ func TestRedactSecret_ServiceAccountKey(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestCredentials_Update(t *testing.T) {
+	e := newTenv(t)
+	key := "first-key-0123456789"
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+key {
+			w.WriteHeader(401)
+			return
+		}
+		w.Write([]byte(`{"data":[{"id":"a"}]}`))
+	}))
+	defer up.Close()
+	put := func(id string, body map[string]any) *httptest.ResponseRecorder {
+		return e.as("admin@x.io", "PUT", "/console/api/v1/credentials/"+id, body)
+	}
+	// testSaved runs Test connection with the saved secret, as the Edit dialog does.
+	testSaved := func(id string) map[string]any {
+		return decodeInto[map[string]any](t, e.as("admin@x.io", "POST", "/console/api/v1/credentials/test",
+			map[string]any{"id": id, "api_base": up.URL}))
+	}
+
+	c := decodeInto[repo.Credential](t, e.as("admin@x.io", "POST", "/console/api/v1/credentials",
+		map[string]any{"name": "c1", "provider": "openai", "api_base": up.URL, "secret": key}))
+	e.as("admin@x.io", "POST", "/console/api/v1/models", map[string]any{"name": "m1", "provider": "openai", "upstream_model": "x", "credential_id": c.ID})
+	list := decodeInto[[]repo.Credential](t, e.as("admin@x.io", "GET", "/console/api/v1/credentials", nil))
+	if len(list) != 1 || len(list[0].UsedBy) != 1 || list[0].UsedBy[0] != "m1" || list[0].SecretUpdatedAt.IsZero() {
+		t.Fatalf("list: %+v", list)
+	}
+
+	// Rename + new endpoint, secret kept: still decrypts (the name is the secret's AAD) and reloads the registry.
+	reloads := e.reloads
+	w := put(c.ID, map[string]any{"name": "c2", "api_base": "https://other.example.com/v1"})
+	got := decodeInto[repo.Credential](t, w)
+	if w.Code != 200 || got.Name != "c2" || got.APIBase != "https://other.example.com/v1" || !got.SecretUpdatedAt.Equal(list[0].SecretUpdatedAt) || e.reloads != reloads+1 {
+		t.Fatalf("keep: %d %s reloads=%d", w.Code, w.Body, e.reloads-reloads)
+	}
+	if r := testSaved(c.ID); r["ok"] != true {
+		t.Fatalf("saved secret after rename: %v", r)
+	}
+
+	// Replace the secret.
+	key = "second-key-9876543210"
+	w = put(c.ID, map[string]any{"secret": key})
+	if got := decodeInto[repo.Credential](t, w); w.Code != 200 || !got.SecretUpdatedAt.After(list[0].SecretUpdatedAt) || got.Name != "c2" {
+		t.Fatalf("replace: %d %s", w.Code, w.Body)
+	}
+	if r := testSaved(c.ID); r["ok"] != true {
+		t.Fatalf("replaced secret not used: %v", r)
+	}
+	if strings.Contains(e.as("admin@x.io", "GET", "/console/api/v1/credentials", nil).Body.String(), key) {
+		t.Fatal("list leaks the secret")
+	}
+
+	e.as("admin@x.io", "POST", "/console/api/v1/credentials", map[string]any{"name": "c3", "provider": "openai"})
+	for name, tc := range map[string]struct {
+		body map[string]any
+		code int
+	}{
+		"provider change": {map[string]any{"provider": "anthropic"}, 400},
+		"same provider":   {map[string]any{"provider": "openai"}, 200},
+		"duplicate name":  {map[string]any{"name": "c3"}, 409},
+		"empty name":      {map[string]any{"name": ""}, 400},
+		"bad endpoint":    {map[string]any{"api_base": "https://x.example.com/v1/"}, 400},
+	} {
+		if w := put(c.ID, tc.body); w.Code != tc.code {
+			t.Errorf("%s: %d %s", name, w.Code, w.Body)
+		}
+	}
+	if w := put("00000000-0000-0000-0000-000000000000", map[string]any{"name": "x"}); w.Code != 404 {
+		t.Fatalf("missing: %d", w.Code)
+	}
+	if w := e.as("member@x.io", "PUT", "/console/api/v1/credentials/"+c.ID, map[string]any{"name": "x"}); w.Code != 403 {
+		t.Fatalf("member: %d", w.Code)
+	}
+
+	// Audit records which fields changed, never their values.
+	entries, _, _ := e.store.ListAudit(t.Context(), repo.AuditFilter{Limit: 50})
+	var updates []string
+	for _, a := range entries {
+		if a.Action != "credential.update" {
+			continue
+		}
+		d := string(a.Details)
+		if strings.Contains(d, "key-") || strings.Contains(d, "other.example.com") || strings.Contains(d, `"c2"`) {
+			t.Fatalf("audit has values: %s", d)
+		}
+		updates = append(updates, strings.ReplaceAll(d, " ", ""))
+	}
+	// keep+rename, replace secret, and the no-op "same provider" save
+	if len(updates) != 3 || !strings.Contains(strings.Join(updates, " "), `["name","api_base"]`) || !strings.Contains(strings.Join(updates, " "), `["secret"]`) {
+		t.Fatalf("audit: %v", updates)
+	}
+}

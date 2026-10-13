@@ -28,13 +28,16 @@ func (s *Server) listCredentials(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, cs) // Ciphertext/Nonce are json:"-"
 }
 
-// credentialForm is the Add credential dialog: POST /credentials and /credentials/test.
+// credentialForm is the credential dialog: POST /credentials and /credentials/test.
 type credentialForm struct {
 	repo.CredentialInput
 	Secret string `json:"secret"`
+	ID     string `json:"id"` // test only: a saved credential whose provider, and secret if none is given, to use
 }
 
-func validCredential(w http.ResponseWriter, in *credentialForm) bool {
+// validCredential checks a credential form. keepSecret (an edit that leaves the secret
+// alone) skips the secret checks.
+func validCredential(w http.ResponseWriter, in *credentialForm, keepSecret bool) bool {
 	if in.Kind == "" {
 		in.Kind = "api_key"
 	}
@@ -50,9 +53,9 @@ func validCredential(w http.ResponseWriter, in *credentialForm) bool {
 		badRequest(w, "provider must be openai, anthropic, or google")
 	case vertex && in.Provider != "google":
 		badRequest(w, "service accounts are for google (Vertex AI) only")
-	case in.Secret == "" && in.Provider != "openai": // OpenAI-compatible servers may need no key
+	case !keepSecret && in.Secret == "" && in.Provider != "openai": // OpenAI-compatible servers may need no key
 		badRequest(w, "secret is required")
-	case vertex && !json.Valid([]byte(in.Secret)):
+	case !keepSecret && vertex && !json.Valid([]byte(in.Secret)):
 		badRequest(w, "service account secret must be the JSON key file contents")
 	case vertex && in.VertexProject == "":
 		badRequest(w, "vertex_project is required for a service account")
@@ -78,7 +81,7 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "name is required")
 		return
 	}
-	if !validCredential(w, &in) {
+	if !validCredential(w, &in, false) {
 		return
 	}
 	nonce, ct, err := s.Vault.Seal(in.Name, []byte(in.Secret))
@@ -98,6 +101,86 @@ func (s *Server) createCredential(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 201, c)
 }
 
+// credentialPatch is PUT /credentials/{id}. Absent fields keep their value, and so does
+// an absent or empty secret. kind and provider can't change.
+type credentialPatch struct {
+	Name           *string `json:"name"`
+	Kind           *string `json:"kind"`
+	Provider       *string `json:"provider"`
+	APIBase        *string `json:"api_base"`
+	VertexProject  *string `json:"vertex_project"`
+	VertexLocation *string `json:"vertex_location"`
+	Secret         string  `json:"secret"`
+}
+
+func (s *Server) updateCredential(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var p credentialPatch
+	if !decode(w, r, &p) {
+		return
+	}
+	old, err := s.Store.GetCredential(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	if (p.Provider != nil && *p.Provider != old.Provider) || (p.Kind != nil && *p.Kind != old.Kind) {
+		badRequest(w, "provider can't be changed; add a new credential instead")
+		return
+	}
+	in := credentialForm{CredentialInput: old.CredentialInput, Secret: p.Secret}
+	for dst, v := range map[*string]*string{&in.Name: p.Name, &in.APIBase: p.APIBase, &in.VertexProject: p.VertexProject, &in.VertexLocation: p.VertexLocation} {
+		if v != nil {
+			*dst = *v
+		}
+	}
+	keep := p.Secret == ""
+	if in.Name == "" {
+		badRequest(w, "name is required")
+		return
+	}
+	if !validCredential(w, &in, keep) {
+		return
+	}
+	// The name is the secret's associated data, so a rename re-seals the kept secret too.
+	secret := []byte(in.Secret)
+	if keep {
+		if secret, err = s.Vault.Open(old.Name, old.Nonce, old.Ciphertext); err != nil {
+			badRequest(w, "the saved secret can't be decrypted (wrong ENCRYPTION_KEY?); enter a new one")
+			return
+		}
+	}
+	nonce, ct, err := s.Vault.Seal(in.Name, secret)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	c, err := s.Store.UpdateCredential(r.Context(), id, in.CredentialInput, nonce, ct, !keep)
+	if err != nil {
+		storeErr(w, err) // ErrConflict → 409 on a duplicate name
+		return
+	}
+	if err := s.Reload(r.Context()); err != nil { // models pick up the new endpoint and secret
+		slog.Error("credential updated; registry reload failed", "err", err)
+	}
+	changed := []string{}
+	for _, f := range []struct {
+		name     string
+		was, now string
+	}{{"name", old.Name, c.Name}, {"api_base", old.APIBase, c.APIBase},
+		{"vertex_project", old.VertexProject, c.VertexProject}, {"vertex_location", old.VertexLocation, c.VertexLocation}} {
+		if f.was != f.now {
+			changed = append(changed, f.name)
+		}
+	}
+	if !keep {
+		changed = append(changed, "secret")
+	}
+	// Field names only: endpoints and project IDs can be sensitive too.
+	s.audit(r, "credential.update", "provider_credentials", id, nil, map[string]any{"changed": changed})
+	api.WriteJSON(w, 200, c)
+}
+
 // credentialTestTimeout bounds Test connection; a var so tests can shorten it.
 var credentialTestTimeout = 10 * time.Second
 
@@ -105,10 +188,29 @@ var credentialTestTimeout = 10 * time.Second
 var probeClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 // testCredential lists the upstream's models with an unsaved credential form. Nothing is
-// stored; the secret is scrubbed from any upstream or transport error text.
+// stored; the secret, typed or saved, is scrubbed from any upstream or transport error text.
 func (s *Server) testCredential(w http.ResponseWriter, r *http.Request) {
 	var in credentialForm
-	if !decode(w, r, &in) || !validCredential(w, &in) {
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.ID != "" { // editing: the saved provider, and the saved secret unless a new one was entered
+		old, err := s.Store.GetCredential(r.Context(), in.ID)
+		if err != nil {
+			storeErr(w, err)
+			return
+		}
+		in.Provider, in.Kind = old.Provider, old.Kind
+		if in.Secret == "" {
+			pt, err := s.Vault.Open(old.Name, old.Nonce, old.Ciphertext)
+			if err != nil {
+				badRequest(w, "the saved secret can't be decrypted (wrong ENCRYPTION_KEY?); enter a new one")
+				return
+			}
+			in.Secret = string(pt)
+		}
+	}
+	if !validCredential(w, &in, false) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), credentialTestTimeout)
