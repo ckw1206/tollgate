@@ -13,9 +13,9 @@ func TestValidateAPIBase(t *testing.T) {
 		"http://172.31.255.1/v1":          true,
 		"http://192.168.1.50:4000":        true,
 		"http://[::1]:8000/v1":            true,
-		"http://172.32.0.1/v1":            false, // outside 172.16/12
-		"http://api.example.com/v1":       false,
-		"http://[fd00::1]/v1":             false, // IPv6 ULA isn't in the allowed list
+		"http://172.32.0.1/v1":            true,
+		"http://api.example.com/v1":       true,
+		"http://[fd00::1]/v1":             true,
 		"https://api.example.com/v1/":     false,
 		"https://u:p@api.example.com/v1":  false,
 		"https://api.example.com/v1?k=1":  false,

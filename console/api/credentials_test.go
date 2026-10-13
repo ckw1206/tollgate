@@ -15,7 +15,7 @@ func TestCredentials_ProviderEndpointValidation(t *testing.T) {
 	post := func(body map[string]any) *httptest.ResponseRecorder {
 		return e.as("admin@x.io", "POST", "/console/api/v1/credentials", body)
 	}
-	// OpenAI-compatible on a private host: plain http and no key are fine.
+	// OpenAI-compatible over plain http with no key is fine.
 	w := post(map[string]any{"name": "vllm", "provider": "openai", "api_base": "http://10.0.0.5:8000/v1"})
 	c := decodeInto[repo.Credential](t, w)
 	if w.Code != 201 || c.Provider != "openai" || c.APIBase != "http://10.0.0.5:8000/v1" || c.Kind != "api_key" {
@@ -26,7 +26,6 @@ func TestCredentials_ProviderEndpointValidation(t *testing.T) {
 		t.Fatalf("vertex: %d %s", w.Code, w.Body)
 	}
 	for name, body := range map[string]map[string]any{
-		"public http":         {"provider": "openai", "api_base": "http://api.example.com/v1"},
 		"trailing slash":      {"provider": "openai", "api_base": "https://api.example.com/v1/"},
 		"not a URL":           {"provider": "openai", "api_base": "api.example.com"},
 		"query":               {"provider": "openai", "api_base": "https://api.example.com/v1?x=1"},
@@ -47,9 +46,9 @@ func TestCredentials_ProviderEndpointValidation(t *testing.T) {
 	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 400 || !strings.Contains(w.Body.String(), "is for openai") {
 		t.Fatalf("provider mismatch: %d %s", w.Code, w.Body)
 	}
-	m["provider"], m["api_base"] = "openai", "http://203.0.113.9/v1"
+	m["provider"], m["api_base"] = "openai", "https://api.example.com/v1/"
 	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 400 {
-		t.Fatalf("model public http: %d", w.Code)
+		t.Fatalf("model trailing slash: %d", w.Code)
 	}
 	delete(m, "api_base")
 	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 201 {
@@ -105,10 +104,10 @@ func TestCredentials_TestConnection(t *testing.T) {
 	if cs, _ := e.store.ListCredentials(t.Context()); len(cs) != 0 {
 		t.Fatalf("stored: %v", cs)
 	}
-	// Same endpoint rules as saving: a public plain-http base is refused before any request.
-	w := e.as("admin@x.io", "POST", "/console/api/v1/credentials/test", map[string]any{"provider": "openai", "api_base": "http://example.com/v1"})
+	// Same endpoint rules as saving: an invalid base is refused before any request.
+	w := e.as("admin@x.io", "POST", "/console/api/v1/credentials/test", map[string]any{"provider": "openai", "api_base": "ftp://example.com/v1"})
 	if w.Code != 400 {
-		t.Fatalf("public http: %d", w.Code)
+		t.Fatalf("invalid base: %d", w.Code)
 	}
 }
 

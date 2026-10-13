@@ -106,7 +106,7 @@ export default function CredentialDialog({ onClose, onSaved }: { onClose: () => 
           </>
         ) : (
           <>
-            <Field label="API endpoint" hint="Plain http only for private or loopback hosts. Models can override it.">
+            <Field label="API endpoint" hint="Models can override it.">
               <input
                 className={inputCls + ' font-mono'}
                 value={form.api_base}
