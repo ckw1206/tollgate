@@ -24,9 +24,19 @@ Credentials can't be edited in place, and one can't be deleted while a model use
 
 Creating or deleting a credential and editing a model all reload the model registry, so no restart is needed.
 
+## API key rotation
+
+Owners (and admins, for any key) rotate a key from the console: **API keys → Rotate**, or `POST /console/api/v1/keys/{id}/rotate` with `{"grace_seconds": N}`.
+
+- A new key is issued with the same owner, group, models, limits, spend counter and expiry. The old key is renamed `… (rotated)` and keeps working for the chosen grace window (0 = revoke now, up to 7 days), or until its own expiry if that is sooner.
+- A rotated key can't be rotated again or edited (both return 400); revoke it early if every client has switched. Watch its **Last used** column to see when they have.
+- During the grace window the old and new keys have separate key-level spend counters and RPM/TPM buckets. Each rotation can therefore add one more key's worth of key-level allowance for up to 7 days (chained rotations add more). The **group** budget and limits cover all of a group's keys together and remain the hard ceiling.
+- When an admin rotates someone else's key, the admin receives the new secret; usage still bills to the owner, and the `key.rotate` audit entry records the admin as the actor.
+- Rotation copies the expiry. If a key is about to expire, rotate it, then edit the new key's **Expires on**.
+
 ## Upgrades and migrations
 
-Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
+Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
 
 ## Background jobs
 
@@ -48,7 +58,7 @@ Failures log `job failed` with the job name and are retried on the next tick.
 | `upstream reported no token usage; request billed $0` | warn | A provider returned success without usage. Occasional is fine. Steady for one model means that provider's usage parsing is broken. |
 | `job failed` | error | A background job errored (see above). |
 
-On shutdown (SIGTERM), the server waits up to 30 s for in-flight requests (including streams), then flushes the spend buffer. Set the stop grace period above 30 s (`stop_grace_period: 45s` in Compose, `terminationGracePeriodSeconds: 45` in K8s). Docker's default of 10 s kills it mid-flush and loses that spend.
+On shutdown (SIGTERM), the server waits up to 30 s for in-flight requests (including streams), then flushes the spend buffer. The bundled `docker-compose.yml` sets `stop_grace_period: 45s`; elsewhere set the equivalent above 30 s (`terminationGracePeriodSeconds: 45` in K8s). Docker's default of 10 s kills it mid-flush and loses that spend.
 
 ## Reverse proxy
 

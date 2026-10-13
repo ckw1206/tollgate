@@ -2,22 +2,23 @@
 
 Self-hosted LLM gateway: one OpenAI-compatible endpoint in front of OpenAI-compatible, Anthropic, and Google models, with per-key and per-group budgets, rate limits, spend tracking, an audit log, and a web console.
 
-> **Status:** backend and console API are done. The web console UI and Docker image are in progress. Until they land, run from source and drive the console API directly.
+## Run it
 
-## Run it (from source)
-
-Requires Go 1.26 and Docker.
+Requires Docker.
 
 ```bash
 cp .env.example .env
 sed -i '' "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env   # Linux: sed -i
-docker compose up -d postgres redis
-set -a; . ./.env; set +a
-go run ./cmd/tollgate admin create --email you@example.com --name You   # prompts for a password (min 12 chars)
-go run ./cmd/tollgate
+VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose up -d --build
+until curl -sf localhost:4000/health >/dev/null; do sleep 1; done
+docker compose exec tollgate /tollgate admin create --email you@example.com --name You   # prompts for a password (min 12 chars)
 ```
 
-Over plain `http`, browsers drop the `Secure` session cookie and login appears to do nothing. Set `COOKIE_INSECURE=true` in `.env` for local testing only. In production, serve over HTTPS and leave it `false`.
+Open `BASE_URL` (default `http://localhost:4000`) and sign in.
+
+Over plain `http` on anything other than `localhost` (and in Safari even on localhost), browsers drop the `Secure` session cookie and login appears to do nothing. Set `COOKIE_INSECURE=true` in `.env` for local testing only. In production, serve over HTTPS and leave it `false`.
+
+`make image` builds a tagged image (`tollgate:<tag or dev>`) with the version and commit shown in the console footer. Without Docker: `make build` (needs Go 1.26 and Node 24), then `set -a; . ./.env; set +a; ./tollgate`.
 
 Then, as admin:
 
@@ -41,6 +42,7 @@ Any OpenAI SDK works with `base_url=$BASE_URL/v1`.
 | `GET /v1/models` | API key |
 | `GET /health` | none |
 | `/auth/*`, `/console/api/v1/*` | session cookie |
+| everything else | the web console (single-page app) |
 
 Console requests that change state must send `Content-Type: application/json` and, if the request has an `Origin` header, it must equal `BASE_URL`. Anything else gets a 403 (CSRF protection).
 
@@ -53,7 +55,7 @@ See [.env.example](.env.example). `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` 
 - Put it behind a TLS-terminating reverse proxy and set `BASE_URL` to the public `https://` URL. Set `TRUSTED_PROXIES` to the proxy's CIDR so client IPs in the audit log and login throttling are real.
 - Back up Postgres **and** `ENCRYPTION_KEY`. Losing the key means re-entering provider credentials. Nothing else is affected.
 - Single instance only: the model registry and spend buffer live in process.
-- Backups, key rotation, upgrades, and log alerts: [docs/operations.md](docs/operations.md).
+- Backups, encryption-key rotation, API key rotation, upgrades, and log alerts: [docs/operations.md](docs/operations.md).
 
 ## Limits (v1)
 
@@ -64,11 +66,20 @@ See [.env.example](.env.example). `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` 
 
 ```bash
 docker compose up -d postgres redis
-export TOLLGATE_TEST_DATABASE_URL='postgres://tollgate:tollgate@localhost:5432/tollgate?sslmode=disable'
-go test -count=1 ./...
+make test   # sets TOLLGATE_TEST_DATABASE_URL, so DB-backed tests fail loudly if Postgres is down
 ```
 
-Without `TOLLGATE_TEST_DATABASE_URL`, the database-backed tests **skip** and the run still reports `ok`.
+Plain `go test ./...` without `TOLLGATE_TEST_DATABASE_URL` **skips** the database-backed tests and still reports `ok`.
+
+Console development with hot reload:
+
+```bash
+set -a; . ./.env; set +a
+BASE_URL=http://localhost:5173 COOKIE_INSECURE=true go run ./cmd/tollgate &   # BASE_URL must match the page origin (CSRF check)
+cd web && npm ci && npm run dev    # console on :5173, API proxied to :4000
+```
+
+The console follows the UI spec's rules: every request goes through `api()` in `web/src/api.ts`, controls are gated with `can(permission)`, colors and radii come from the Alison UI tokens in `web/src/styles/`, and there is no `alert()`/`confirm()`.
 
 ## License
 
