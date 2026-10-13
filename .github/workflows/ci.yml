@@ -115,6 +115,7 @@ jobs:
           [[ $next =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $next"; exit 1; }
           echo "Releasing $next (previous: ${last:-none})"
           echo "next=$next" >> "$GITHUB_OUTPUT"
+          echo "last=$last" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -165,8 +166,40 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Notes grouped by title prefix: one line per commit on main (squash) or merged PR (merge commit).
+      - name: Release notes
+        env:
+          LAST: ${{ steps.version.outputs.last }}
+          VERSION: ${{ steps.version.outputs.next }}
+        run: |
+          declare -A group
+          for c in $(git rev-list --first-parent "${LAST:+$LAST..}HEAD"); do
+            subject=$(git show -s --format=%s "$c")
+            line=$subject
+            if [ "$(git show -s --format=%P "$c" | wc -w)" -gt 1 ]; then # merge commit: PR title is the body
+              title=$(git show -s --format=%b "$c" | head -1)
+              pr=$(grep -oE '#[0-9]+' <<<"$subject" | head -1)
+              line="${title:-$subject}${pr:+ ($pr)}"
+            fi
+            if grep -qE '^[a-z]+(\(.*\))?!:' <<<"$line" || git show -s --format=%b "$c" | grep -q 'BREAKING CHANGE'; then g=breaking
+            elif grep -qE '^feat(\(.*\))?:' <<<"$line"; then g=feat
+            elif grep -qE '^fix(\(.*\))?:' <<<"$line"; then g=fix
+            elif grep -qiE '^(bump |(build|chore)\(deps)' <<<"$line"; then g=deps
+            else g=other; fi
+            group[$g]+="- $line"$'\n'
+          done
+          {
+            for g in "breaking:⚠️ Breaking changes" "feat:Features" "fix:Fixes" "other:Other changes" "deps:Dependencies"; do
+              [ -n "${group[${g%%:*}]}" ] && printf '## %s\n\n%s\n' "${g#*:}" "${group[${g%%:*}]}"
+            done
+            if [ -n "$LAST" ]; then
+              echo "**Full changelog:** $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/$LAST...$VERSION"
+            fi
+          } > notes.md
+          cat notes.md
+
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.next }}
-        run: gh release create "$VERSION" out/* --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
+        run: gh release create "$VERSION" out/* --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md
