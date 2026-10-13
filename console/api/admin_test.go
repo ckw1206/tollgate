@@ -113,3 +113,31 @@ func TestSettingsAndAudit_AdminOnly(t *testing.T) {
 		t.Fatalf("member audit: %d", w.Code)
 	}
 }
+
+func TestModels_NonWritersDontSeeUpstreamDetails(t *testing.T) {
+	e := newTenv(t)
+	body := map[string]any{"name": "azure", "provider": "openai", "upstream_model": "gpt-4o", "enabled": true,
+		"api_base": "https://corp.example.com/openai", "extra": map[string]any{"headers": map[string]string{"api-key": "upstream-secret"}}}
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", body); w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if b := e.as("admin@x.io", "GET", "/console/api/v1/models", nil).Body.String(); !strings.Contains(b, "upstream-secret") {
+		t.Fatal("admin should see extra")
+	}
+	for _, who := range []string{"member@x.io", "viewer@x.io"} {
+		b := e.as(who, "GET", "/console/api/v1/models", nil).Body.String()
+		if strings.Contains(b, "upstream-secret") || strings.Contains(b, "corp.example.com") || !strings.Contains(b, `"name":"azure"`) {
+			t.Fatalf("%s sees upstream details: %s", who, b)
+		}
+	}
+}
+
+func TestModels_RejectsExtraTheRegistryCantLoad(t *testing.T) {
+	e := newTenv(t)
+	for _, extra := range []any{[]any{}, "x", map[string]any{"headers": map[string]any{"X": 1}}} {
+		body := map[string]any{"name": "m", "provider": "openai", "upstream_model": "m", "extra": extra}
+		if w := e.as("admin@x.io", "POST", "/console/api/v1/models", body); w.Code != 400 {
+			t.Fatalf("extra %v: %d", extra, w.Code)
+		}
+	}
+}

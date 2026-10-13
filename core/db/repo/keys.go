@@ -2,19 +2,21 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
 type APIKey struct {
-	ID         string    `json:"id"`
-	KeyPrefix  string    `json:"key_prefix"`
-	Alias      string    `json:"alias"`
-	UserID     string    `json:"user_id"`
-	GroupID    string    `json:"group_id"`
-	Models     []string  `json:"models"`
+	ID        string   `json:"id"`
+	KeyPrefix string   `json:"key_prefix"`
+	Alias     string   `json:"alias"`
+	UserID    string   `json:"user_id"`
+	GroupID   string   `json:"group_id"`
+	Models    []string `json:"models"`
 	Limits
 	ExpiresAt  *time.Time `json:"expires_at"`
 	RevokedAt  *time.Time `json:"revoked_at"`
+	RotatedAt  *time.Time `json:"rotated_at"`
 	LastUsedAt *time.Time `json:"last_used_at"`
 	CreatedAt  time.Time  `json:"created_at"`
 }
@@ -44,12 +46,12 @@ func GenerateKey() (raw, hash, prefix string) {
 
 const keyCols = `k.id, k.key_prefix, k.alias, k.user_id, k.group_id, k.models,
 	k.budget_type, k.budget_nanos, k.spend_nanos, k.budget_reset_at, k.rpm_limit, k.tpm_limit,
-	k.expires_at, k.revoked_at, k.last_used_at, k.created_at`
+	k.expires_at, k.revoked_at, k.rotated_at, k.last_used_at, k.created_at`
 
 func keyDest(k *APIKey) []any {
 	return []any{&k.ID, &k.KeyPrefix, &k.Alias, &k.UserID, &k.GroupID, &k.Models,
 		&k.BudgetType, &k.BudgetNanos, &k.SpendNanos, &k.BudgetResetAt, &k.RPMLimit, &k.TPMLimit,
-		&k.ExpiresAt, &k.RevokedAt, &k.LastUsedAt, &k.CreatedAt}
+		&k.ExpiresAt, &k.RevokedAt, &k.RotatedAt, &k.LastUsedAt, &k.CreatedAt}
 }
 
 func scanKey(r scanner) (*APIKey, error) {
@@ -104,7 +106,7 @@ func (s *Store) UpdateKey(ctx context.Context, id string, in KeyInput) (*APIKey,
 			spend_nanos     = CASE WHEN k.budget_type <> $5::budget_type THEN 0 ELSE k.spend_nanos END,
 			budget_reset_at = CASE WHEN k.budget_type <> $5::budget_type THEN next_budget_reset($5) ELSE k.budget_reset_at END,
 			budget_type=$5
-		WHERE k.id=$1 RETURNING `+keyCols,
+		WHERE k.id=$1 AND k.rotated_at IS NULL AND k.revoked_at IS NULL RETURNING `+keyCols,
 		id, in.Alias, in.GroupID, nonNil(in.Models), in.BudgetType, in.BudgetNanos, in.RPMLimit, in.TPMLimit, in.ExpiresAt))
 }
 
@@ -129,4 +131,48 @@ func (s *Store) AuthByKeyHash(ctx context.Context, hash string) (*AuthInfo, erro
 		FROM api_keys k JOIN users u ON u.id = k.user_id JOIN groups g ON g.id = k.group_id
 		WHERE k.key_hash = $1`, hash).Scan(dest...)
 	return &a, notFound(err)
+}
+
+var ErrKeyNotRotatable = errors.New("key is revoked, expired, or already rotated")
+
+// RotateKey issues a replacement for an active key and retires the old one:
+// revoked now when grace is 0, otherwise expiring at min(expires_at, now+grace).
+// The new key keeps the old key's owner, limits, spend and expiry. FOR UPDATE
+// makes it single-use: a concurrent rotate waits, then sees rotated_at.
+func (s *Store) RotateKey(ctx context.Context, id string, grace time.Duration) (string, *APIKey, *APIKey, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	old, err := scanKey(tx.QueryRow(ctx, `SELECT `+keyCols+` FROM api_keys k WHERE k.id=$1 FOR UPDATE`, id))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if old.RevokedAt != nil || old.RotatedAt != nil || (old.ExpiresAt != nil && !old.ExpiresAt.After(time.Now())) {
+		return "", nil, nil, ErrKeyNotRotatable
+	}
+
+	raw, hash, prefix := GenerateKey()
+	nk, err := scanKey(tx.QueryRow(ctx, `
+		INSERT INTO api_keys AS k (key_hash, key_prefix, alias, user_id, group_id, models,
+			budget_type, budget_nanos, spend_nanos, budget_reset_at, rpm_limit, tpm_limit, expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING `+keyCols,
+		hash, prefix, old.Alias, old.UserID, old.GroupID, nonNil(old.Models),
+		old.BudgetType, old.BudgetNanos, old.SpendNanos, old.BudgetResetAt, old.RPMLimit, old.TPMLimit, old.ExpiresAt))
+	if err != nil {
+		return "", nil, nil, err
+	}
+
+	retired, err := scanKey(tx.QueryRow(ctx, `
+		UPDATE api_keys k SET rotated_at = now(), alias = k.alias || ' (rotated)',
+			revoked_at = CASE WHEN $2::int = 0 THEN now() END,
+			expires_at = CASE WHEN $2::int = 0 THEN k.expires_at
+				ELSE LEAST(k.expires_at, now() + make_interval(secs => $2::int)) END
+		WHERE k.id = $1 RETURNING `+keyCols, id, int32(grace/time.Second)))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return raw, nk, retired, tx.Commit(ctx)
 }

@@ -31,10 +31,24 @@ func Open(ctx context.Context, url string) (*DB, error) {
 
 func (d *DB) Close() { d.Pool.Close() }
 
+// migrateLock is the advisory-lock key that serializes concurrent migrators
+// (serve and `admin create` started together against a fresh database).
+const migrateLock = 7_342_031
+
 // Migrate applies every migrations/*.sql not yet recorded in schema_migrations,
 // in filename order, each in its own transaction.
 func (d *DB) Migrate(ctx context.Context) error {
-	if _, err := d.Pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	conn, err := d.Pool.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrateLock); err != nil {
+		return err
+	}
+	defer conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", migrateLock)
+
+	if _, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
@@ -45,14 +59,14 @@ func (d *DB) Migrate(ctx context.Context) error {
 	sort.Strings(names)
 	for _, name := range names {
 		var done bool
-		if err := d.Pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", name).Scan(&done); err != nil {
+		if err := conn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)", name).Scan(&done); err != nil {
 			return err
 		}
 		if done {
 			continue
 		}
 		sql, _ := migrations.ReadFile(name)
-		tx, err := d.Pool.Begin(ctx)
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return err
 		}

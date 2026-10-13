@@ -51,7 +51,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-func (s *Server) me(w http.ResponseWriter, r *http.Request) { s.writeMe(w, r, auth.UserFrom(r.Context())) }
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	s.writeMe(w, r, auth.UserFrom(r.Context()))
+}
 
 func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, u *repo.User) {
 	st, err := s.Store.GetSettings(r.Context())
@@ -59,5 +61,10 @@ func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, u *repo.User) {
 		storeErr(w, err)
 		return
 	}
-	api.WriteJSON(w, 200, map[string]any{"user": u, "permissions": rbac.Permissions(u.Role), "server": st})
+	server := struct {
+		*repo.Settings
+		Version string `json:"version"`
+		Commit  string `json:"commit"`
+	}{st, s.Version, s.Commit}
+	api.WriteJSON(w, 200, map[string]any{"user": u, "permissions": rbac.Permissions(u.Role), "server": server})
 }

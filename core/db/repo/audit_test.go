@@ -25,4 +25,7 @@ func TestAudit_InsertListPaginate(t *testing.T) {
 	if total != 1 || only[0].Action != "key.create" {
 		t.Fatalf("filter: %+v", only)
 	}
+	if _, total, _ := s.ListAudit(ctx, repo.AuditFilter{Action: "key.", Limit: 50}); total != 2 {
+		t.Fatalf("prefix filter matched %d, want 2", total)
+	}
 }

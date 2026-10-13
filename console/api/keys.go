@@ -1,7 +1,9 @@
 package consoleapi
 
 import (
+	"errors"
 	"net/http"
+	"time"
 
 	"tollgate/console/auth"
 	"tollgate/console/rbac"
@@ -76,6 +78,11 @@ func (s *Server) updateKey(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Editing a rotated key could push its grace expiry out again; a revoked key is dead.
+	if before.RotatedAt != nil || before.RevokedAt != nil {
+		badRequest(w, "rotated or revoked keys can't be edited")
+		return
+	}
 	var in repo.KeyInput
 	if !decode(w, r, &in) || !validKey(w, in) {
 		return
@@ -103,4 +110,34 @@ func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "key.revoke", "api_keys", k.ID, k, nil)
 	w.WriteHeader(204)
+}
+
+const maxRotateGrace = 7 * 24 * 3600
+
+func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request) {
+	k, ok := s.ownedKey(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		GraceSeconds *int64 `json:"grace_seconds"` // required: absent must not mean "revoke now"
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.GraceSeconds == nil || *in.GraceSeconds < 0 || *in.GraceSeconds > maxRotateGrace {
+		badRequest(w, "grace_seconds is required, 0 to 604800")
+		return
+	}
+	raw, nk, old, err := s.Store.RotateKey(r.Context(), k.ID, time.Duration(*in.GraceSeconds)*time.Second)
+	if errors.Is(err, repo.ErrKeyNotRotatable) {
+		badRequest(w, err.Error())
+		return
+	}
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	s.audit(r, "key.rotate", "api_keys", k.ID, k, map[string]any{"old": old, "new": nk, "grace_seconds": *in.GraceSeconds})
+	api.WriteJSON(w, 201, map[string]any{"raw": raw, "key": nk, "old": old})
 }

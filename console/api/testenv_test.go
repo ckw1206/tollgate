@@ -22,15 +22,15 @@ import (
 const base = "https://gw.example.com"
 
 type tenv struct {
-	t        *testing.T
-	h        http.Handler
-	store    *repo.Store
-	group    *repo.Group
-	admin    *repo.User
-	member   *repo.User
-	viewer   *repo.User
-	reloads  int
-	cookies  map[string]*http.Cookie
+	t       *testing.T
+	h       http.Handler
+	store   *repo.Store
+	group   *repo.Group
+	admin   *repo.User
+	member  *repo.User
+	viewer  *repo.User
+	reloads int
+	cookies map[string]*http.Cookie
 }
 
 func newTenv(t *testing.T) *tenv {
@@ -45,6 +45,7 @@ func newTenv(t *testing.T) *tenv {
 	c := cache.FromClient(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
 	v, _ := vault.New(bytes.Repeat([]byte{3}, 32))
 	srv := &Server{Store: s, Cache: c, Vault: v, BaseURL: base,
+		Version: "v0.0.0-test", Commit: "0123456789abcdef0123456789abcdef01234567",
 		Sessions: &auth.Sessions{Cache: c, Store: s, TTL: time.Hour},
 		Reload:   func(context.Context) error { e.reloads++; return nil }}
 	mux := http.NewServeMux()

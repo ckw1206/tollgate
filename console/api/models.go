@@ -1,12 +1,16 @@
 package consoleapi
 
 import (
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 
+	"tollgate/console/auth"
+	"tollgate/console/rbac"
 	"tollgate/core/api"
 	"tollgate/core/db/repo"
+	"tollgate/core/llm"
 )
 
 func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
@@ -17,6 +21,13 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if ms == nil {
 		ms = []repo.Model{}
+	}
+	// extra.headers can carry upstream auth, and api_base/credential_id are
+	// deployment details: only people who can edit models see them.
+	if !rbac.Has(auth.UserFrom(r.Context()).Role, rbac.ModelsWrite) {
+		for i := range ms {
+			ms[i].Extra, ms[i].APIBase, ms[i].CredentialID = nil, "", nil
+		}
 	}
 	api.WriteJSON(w, 200, ms)
 }
@@ -31,6 +42,9 @@ func validModel(w http.ResponseWriter, in repo.ModelInput) bool {
 		badRequest(w, "prices must not be negative")
 	case in.Provider != "openai" && in.CredentialID == nil:
 		badRequest(w, in.Provider+" models need a credential")
+	case len(in.Extra) > 0 && json.Unmarshal(in.Extra, new(llm.Extra)) != nil:
+		// The registry skips models whose extra doesn't decode; reject it here instead.
+		badRequest(w, "extra must be an object: vertex_project, vertex_location, headers (string map)")
 	default:
 		return true
 	}

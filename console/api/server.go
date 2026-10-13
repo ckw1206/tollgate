@@ -18,13 +18,14 @@ import (
 )
 
 type Server struct {
-	Store          *repo.Store
-	Cache          *cache.Cache
-	Sessions       *auth.Sessions
-	Vault          *vault.Vault
-	Reload         func(context.Context) error // rebuild the model registry after model/credential writes
-	BaseURL        string
-	TrustedProxies []netip.Prefix
+	Store           *repo.Store
+	Cache           *cache.Cache
+	Sessions        *auth.Sessions
+	Vault           *vault.Vault
+	Reload          func(context.Context) error // rebuild the model registry after model/credential writes
+	BaseURL         string
+	TrustedProxies  []netip.Prefix
+	Version, Commit string // build info for /auth/me, set by main from -ldflags
 }
 
 const p = "/console/api/v1"
@@ -32,24 +33,25 @@ const p = "/console/api/v1"
 func (s *Server) Register(mux *http.ServeMux) {
 	req := s.Sessions.Require
 	routes := map[string]http.Handler{
-		"POST /auth/login":           http.HandlerFunc(s.login),
-		"POST /auth/logout":          req("", s.logout),
-		"GET /auth/me":               req("", s.me),
-		"GET /auth/invite/{token}":   http.HandlerFunc(s.inviteInfo),
-		"POST /auth/invite/{token}":  http.HandlerFunc(s.inviteAccept),
-		"GET " + p + "/invites":         req(rbac.InvitesRead, s.listInvites),
-		"POST " + p + "/invites":        req(rbac.InvitesWrite, s.createInvite),
-		"DELETE " + p + "/invites/{id}": req(rbac.InvitesWrite, s.revokeInvite),
-		"GET " + p + "/users":           req(rbac.UsersRead, s.listUsers),
-		"PUT " + p + "/users/{id}":      req(rbac.UsersWrite, s.updateUser),
-		"DELETE " + p + "/users/{id}":   req(rbac.UsersWrite, s.disableUser),
-		"GET " + p + "/groups":          req(rbac.GroupsReadOwn, s.listGroups),
-		"POST " + p + "/groups":         req(rbac.GroupsWrite, s.createGroup),
-		"PUT " + p + "/groups/{id}":     req(rbac.GroupsWrite, s.updateGroup),
-		"GET " + p + "/keys":            req(rbac.KeysReadOwn, s.listKeys),
-		"POST " + p + "/keys":           req(rbac.KeysWriteOwn, s.createKey),
-		"PUT " + p + "/keys/{id}":       req(rbac.KeysWriteOwn, s.updateKey),
-		"DELETE " + p + "/keys/{id}":    req(rbac.KeysWriteOwn, s.revokeKey),
+		"POST /auth/login":                http.HandlerFunc(s.login),
+		"POST /auth/logout":               req("", s.logout),
+		"GET /auth/me":                    req("", s.me),
+		"GET /auth/invite/{token}":        http.HandlerFunc(s.inviteInfo),
+		"POST /auth/invite/{token}":       http.HandlerFunc(s.inviteAccept),
+		"GET " + p + "/invites":           req(rbac.InvitesRead, s.listInvites),
+		"POST " + p + "/invites":          req(rbac.InvitesWrite, s.createInvite),
+		"DELETE " + p + "/invites/{id}":   req(rbac.InvitesWrite, s.revokeInvite),
+		"GET " + p + "/users":             req(rbac.UsersRead, s.listUsers),
+		"PUT " + p + "/users/{id}":        req(rbac.UsersWrite, s.updateUser),
+		"DELETE " + p + "/users/{id}":     req(rbac.UsersWrite, s.disableUser),
+		"GET " + p + "/groups":            req(rbac.GroupsReadOwn, s.listGroups),
+		"POST " + p + "/groups":           req(rbac.GroupsWrite, s.createGroup),
+		"PUT " + p + "/groups/{id}":       req(rbac.GroupsWrite, s.updateGroup),
+		"GET " + p + "/keys":              req(rbac.KeysReadOwn, s.listKeys),
+		"POST " + p + "/keys":             req(rbac.KeysWriteOwn, s.createKey),
+		"PUT " + p + "/keys/{id}":         req(rbac.KeysWriteOwn, s.updateKey),
+		"DELETE " + p + "/keys/{id}":      req(rbac.KeysWriteOwn, s.revokeKey),
+		"POST " + p + "/keys/{id}/rotate": req(rbac.KeysWriteOwn, s.rotateKey),
 	}
 	for pattern, h := range s.extraRoutes() { // Task 16
 		routes[pattern] = h

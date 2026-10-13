@@ -40,7 +40,7 @@ func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry, int
 	if f.Limit <= 0 || f.Limit > 200 {
 		f.Limit = 50
 	}
-	where := `WHERE ($1 = '' OR actor_id::text = $1) AND ($2 = '' OR action = $2)
+	where := `WHERE ($1 = '' OR actor_id::text = $1) AND ($2 = '' OR action LIKE $2 || '%')
 	            AND ($3::timestamptz IS NULL OR created_at >= $3) AND ($4::timestamptz IS NULL OR created_at < $4)`
 	args := []any{f.ActorID, f.Action, f.From, f.To}
 	var total int
