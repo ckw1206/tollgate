@@ -14,7 +14,7 @@ Self-hosted LLM gateway. Go 1.26, single module `tollgate`, one binary, one port
 ## Testing
 
 ```bash
-docker compose up -d postgres redis
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
 make test                      # Go: sets TOLLGATE_TEST_DATABASE_URL for you
 cd web && npm run build        # console: strict type-check + Vite build
 ```

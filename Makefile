@@ -15,6 +15,6 @@ image:
 	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t tollgate:$(VERSION) .
 
 # DB-backed tests skip silently without TOLLGATE_TEST_DATABASE_URL; `make test` always sets it,
-# so a missing Postgres fails loudly. Start it with: docker compose up -d postgres redis
+# so a missing Postgres fails loudly. Start it with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
 test:
 	TOLLGATE_TEST_DATABASE_URL='$(TEST_DB)' go test -count=1 ./...

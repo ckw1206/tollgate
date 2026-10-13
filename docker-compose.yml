@@ -5,7 +5,6 @@ services:
       POSTGRES_USER: tollgate
       POSTGRES_PASSWORD: tollgate
       POSTGRES_DB: tollgate
-    ports: ["${POSTGRES_PORT:-5432}:5432"] # host side only; tollgate uses postgres:5432 inside compose
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "tollgate", "-d", "tollgate"]
@@ -13,7 +12,6 @@ services:
       retries: 30
   redis:
     image: redis:7-alpine
-    ports: ["${REDIS_PORT:-6379}:6379"]
   tollgate:
     build:
       context: .

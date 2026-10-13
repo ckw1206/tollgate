@@ -65,7 +65,7 @@ See [.env.example](.env.example). `DATABASE_URL`, `REDIS_URL`, `ENCRYPTION_KEY` 
 ## Develop
 
 ```bash
-docker compose up -d postgres redis
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
 make test   # sets TOLLGATE_TEST_DATABASE_URL, so DB-backed tests fail loudly if Postgres is down
 ```
 
