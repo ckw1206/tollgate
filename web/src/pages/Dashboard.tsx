@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { usd, when } from '../api'
 import { useAuth } from '../auth'
-import { Badge, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Table, useLoad } from '../components/ui'
-import type { SpendLog, SpendRow } from '../types'
+import GetStarted from '../components/GetStarted'
+import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Table, useLoad } from '../components/ui'
+import type { ApiKey, SpendLog, SpendRow } from '../types'
 
 type Spend = { rows: SpendRow[]; recent: SpendLog[] }
 type Metric = 'tokens' | 'requests' | 'cost'
@@ -34,7 +36,7 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 
 // TopModels: up to 8 rows from group_by=model, sorted by the chosen metric.
 // Bar = share of the leader; % = share of the total.
-function TopModels({ rows }: { rows: SpendRow[] | null }) {
+function TopModels({ rows, emptyText }: { rows: SpendRow[] | null; emptyText: string }) {
   const [metric, setMetric] = useState<Metric>('cost')
   const sorted = useMemo(() => (rows ?? []).filter((r) => metricOf(r, metric) > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [rows, metric])
   const top = sorted.slice(0, 8)
@@ -48,7 +50,7 @@ function TopModels({ rows }: { rows: SpendRow[] | null }) {
       {rows === null ? (
         <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" />)}</div>
       ) : top.length === 0 ? (
-        <p className="py-6 text-center text-sm text-muted-foreground">No requests in this period.</p>
+        <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
       ) : (
         <ol className="space-y-3">
           {top.map((r, i) => {
@@ -77,7 +79,17 @@ function TopModels({ rows }: { rows: SpendRow[] | null }) {
 }
 
 export default function Dashboard() {
-  const { can } = useAuth()
+  const { me, can } = useAuth()
+  const [params, setParams] = useSearchParams()
+  // ?welcome=1 comes from first-run setup: show the banner once, then drop the flag.
+  const [welcome, setWelcome] = useState(() => params.get('welcome') === '1')
+  useEffect(() => {
+    if (params.has('welcome')) {
+      const p = new URLSearchParams(params)
+      p.delete('welcome')
+      setParams(p, { replace: true })
+    }
+  }, [params, setParams])
   const [days, setDays] = useState(30)
   // Round "from" to the minute so the URL (and the fetch) is stable across re-renders.
   const from = useMemo(() => new Date(Math.floor((Date.now() - days * DAY) / 60_000) * 60_000).toISOString(), [days])
@@ -91,8 +103,22 @@ export default function Dashboard() {
   const tokens = sum((r) => r.input_tokens + r.output_tokens)
   const chart = (rows ?? []).map((r) => ({ day: r.bucket, usd: r.cost_nanos / 1e9 }))
 
+  // Empty dashboard without the checklist (members and viewers): a next step, never a dead end.
+  // "Yet" copy only when nothing has ever been recorded; a quiet range says "in this period".
+  const ever = useLoad<Spend>(rows !== null && rows.length === 0 ? '/console/api/v1/spend?group_by=model&from=1970-01-01T00%3A00%3A00Z' : null)
+  const neverUsed = rows !== null && rows.length === 0 && ever.data !== null && ever.data.recent.length === 0
+  // Members and viewers without a key get a next step, never a dead end.
+  const myKeys = useLoad<ApiKey[]>(can('models:write') ? null : '/console/api/v1/keys')
+  const nothingYet = myKeys.data !== null && myKeys.data.length === 0
   return (
     <>
+      {welcome && me && (
+        <div className="mb-6">
+          <Banner onDismiss={() => setWelcome(false)}>
+            <b className="font-semibold">Admin account created.</b> You're signed in as {me.user.email}. The setup token is now invalid.
+          </Banner>
+        </div>
+      )}
       <PageHeader title={can('spend:read_all') ? 'Usage — everyone' : 'Your usage'}>
         <select aria-label="Range" className={controlCls + ' h-9 text-sm'} value={days} onChange={(e) => setDays(Number(e.target.value))}>
           <option value={7}>Last 7 days</option>
@@ -100,6 +126,18 @@ export default function Dashboard() {
           <option value={90}>Last 90 days</option>
         </select>
       </PageHeader>
+      {can('models:write') && <GetStarted />}
+      {nothingYet && (
+        <p className="-mt-2 mb-4 text-sm text-muted-foreground">
+          {can('keys:write_own') ? (
+            <>
+              Create a key on <Link to="/keys" className="text-link-foreground underline underline-offset-2 hover:text-foreground">API keys</Link> to make your first request.
+            </>
+          ) : (
+            'Ask an admin to create an API key for you.'
+          )}
+        </p>
+      )}
       <div className="mb-4 space-y-1">
         <ErrorText>{daily.error}</ErrorText>
         <ErrorText>{daily.error ? '' : byModel.error}</ErrorText>
@@ -115,7 +153,7 @@ export default function Dashboard() {
             {rows === null ? (
               <Skeleton className="h-full w-full" />
             ) : chart.length === 0 ? (
-              <p className="flex h-full items-center justify-center text-sm text-muted-foreground">No requests in this period.</p>
+              <p className="flex h-full items-center justify-center text-sm text-muted-foreground">{neverUsed ? 'No requests yet.' : 'No requests in this period.'}</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
@@ -132,7 +170,7 @@ export default function Dashboard() {
             )}
           </div>
         </Panel>
-        <TopModels rows={byModel.data?.rows ?? (byModel.error ? [] : null)} />
+        <TopModels rows={byModel.data?.rows ?? (byModel.error ? [] : null)} emptyText={neverUsed ? 'No models used yet.' : 'No requests in this period.'} />
       </div>
       <h2 className="mb-3 text-sm font-medium">Recent requests</h2>
       <Table

@@ -118,6 +118,18 @@ export interface Settings {
   server_icon: string
   timezone: string
   currency: string
+  landing_headline: string // ≤ 80 characters; '' = default copy
+  landing_tagline: string // ≤ 160 characters; '' = default copy
+}
+
+// GET /auth/landing: public, cached for 60s.
+export interface LandingInfo {
+  server_name: string
+  server_icon: string
+  landing_headline: string
+  landing_tagline: string
+  version: string
+  commit: string
 }
 
 // /auth/me adds the build version to the settings row (read-only).

@@ -17,7 +17,7 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
     headers: { 'Content-Type': 'application/json' },
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   })
-  if (res.status === 401 && !path.startsWith('/auth/')) {
+  if (res.status === 401 && !path.startsWith('/auth/') && path !== '/health') {
     const here = window.location.pathname + window.location.search
     window.location.assign('/login?from=' + encodeURIComponent(here))
     throw new ApiError(401, 'signed out')

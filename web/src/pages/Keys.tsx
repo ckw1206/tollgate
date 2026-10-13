@@ -1,29 +1,13 @@
 import { useState, type FormEvent } from 'react'
 import { api, short, when } from '../api'
 import { useAuth } from '../auth'
-import { budgetText, LimitsFields, limitsPayload, limitsState, limitText, type LimitsState } from '../components/LimitsFields'
+import KeyDialog from '../components/KeyDialog'
+import { budgetText, limitText } from '../components/LimitsFields'
 import {
-  Badge, Button, ConfirmDialog, DetailPanel, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, SecretDialog,
+  Badge, Button, ConfirmDialog, DetailPanel, ErrorText, Modal, ModalFooter, PageHeader, RowActions, rowsOf, SecretDialog,
   Segmented, Table, useLoad, type Tone,
 } from '../components/ui'
 import type { ApiKey, Group, User } from '../types'
-
-interface Form { alias: string; models: string; expires: string; group_id: string; limits: LimitsState }
-
-const emptyForm = (k?: ApiKey): Form => ({
-  alias: k?.alias ?? '',
-  models: k?.models.join(', ') ?? '',
-  expires: k?.expires_at ? toDateInput(k.expires_at) : '',
-  group_id: k?.group_id ?? '',
-  limits: limitsState(k),
-})
-
-// <input type="date"> works in the browser's local calendar; keep it that way both directions.
-function toDateInput(iso: string) {
-  const d = new Date(iso)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 
 const DAY = 86_400_000
 
@@ -57,7 +41,6 @@ export default function Keys() {
   const users = useLoad<User[]>(can('users:read') ? '/console/api/v1/users' : null)
   const groups = useLoad<Group[]>('/console/api/v1/groups')
   const [editing, setEditing] = useState<ApiKey | 'new' | null>(null)
-  const [form, setForm] = useState<Form>(emptyForm())
   const [secret, setSecret] = useState<{ title: string; raw: string; until?: string } | null>(null)
   const [revoking, setRevoking] = useState<ApiKey | null>(null)
   const [rotating, setRotating] = useState<ApiKey | null>(null)
@@ -67,38 +50,7 @@ export default function Keys() {
 
   const email = (id: string) => users.data?.find((u) => u.id === id)?.email ?? short(id)
   const groupName = (id: string) => groups.data?.find((g) => g.id === id)?.name ?? short(id)
-  const open = (k: ApiKey | 'new') => {
-    setEditing(k)
-    setForm(emptyForm(k === 'new' ? undefined : k))
-    setError('')
-  }
-
-  const save = async (e: FormEvent) => {
-    e.preventDefault()
-    const body = {
-      alias: form.alias,
-      models: form.models.split(',').map((s) => s.trim()).filter(Boolean),
-      expires_at: form.expires ? new Date(form.expires + 'T23:59:59').toISOString() : null,
-      group_id: form.group_id || undefined,
-      ...limitsPayload(form.limits),
-    }
-    setBusy(true)
-    setError('')
-    try {
-      if (editing === 'new') {
-        const res = await api<{ raw: string }>('/console/api/v1/keys', { method: 'POST', body })
-        setSecret({ title: 'Your new API key', raw: res.raw })
-      } else if (editing) {
-        await api(`/console/api/v1/keys/${editing.id}`, { method: 'PUT', body })
-      }
-      setEditing(null)
-      keys.reload()
-    } catch (err) {
-      setError((err as Error).message)
-    } finally {
-      setBusy(false)
-    }
-  }
+  const open = (k: ApiKey | 'new') => setEditing(k)
 
   const openRotate = (k: ApiKey) => {
     setRotating(k)
@@ -180,29 +132,17 @@ export default function Keys() {
       />
 
       {editing && (
-        <Modal title={editing === 'new' ? 'New API key' : `Edit "${editing.alias}"`} onClose={() => setEditing(null)}>
-          <form onSubmit={save} className="space-y-4">
-            <Field label="Alias"><input className={inputCls} required value={form.alias} onChange={(e) => setForm({ ...form, alias: e.target.value })} /></Field>
-            <Field label="Allowed models" hint="Comma-separated model names. Blank = all models.">
-              <input className={inputCls} value={form.models} onChange={(e) => setForm({ ...form, models: e.target.value })} />
-            </Field>
-            {can('keys:write_all') && (
-              <Field label="Billing group">
-                <select className={inputCls} value={form.group_id} onChange={(e) => setForm({ ...form, group_id: e.target.value })}>
-                  <option value="">Owner's group</option>
-                  {groups.data?.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                </select>
-              </Field>
-            )}
-            <LimitsFields value={form.limits} onChange={(limits) => setForm({ ...form, limits })} />
-            <Field label="Expires on" hint="Blank = never"><input className={inputCls} type="date" value={form.expires} onChange={(e) => setForm({ ...form, expires: e.target.value })} /></Field>
-            <ErrorText>{error}</ErrorText>
-            <ModalFooter>
-              <Button type="button" variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
-              <Button disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>
-            </ModalFooter>
-          </form>
-        </Modal>
+        <KeyDialog
+          apiKey={editing}
+          groups={groups.data ?? []}
+          canBillingGroup={can('keys:write_all')}
+          onClose={() => setEditing(null)}
+          onSaved={({ raw }) => {
+            setEditing(null)
+            if (raw) setSecret({ title: 'Your new API key', raw })
+            keys.reload()
+          }}
+        />
       )}
 
       {rotating && (

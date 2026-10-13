@@ -13,20 +13,33 @@ export const controlCls =
 
 export const inputCls = controlCls + ' mt-1 block min-h-9 w-full py-1 text-sm'
 
-type Variant = 'primary' | 'ghost' | 'danger'
+type Variant = 'primary' | 'ghost' | 'danger' | 'quiet' | 'link'
 
+// quiet: outline with muted text (e.g. Hide). link: an underlined muted text button.
 export function Button({ variant = 'primary', size = 'md', className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'md' | 'sm' }) {
   const styles = {
     primary: 'bg-primary text-primary-foreground hover:opacity-90',
     ghost: 'border border-border bg-transparent text-foreground hover:bg-accent',
     danger: 'bg-destructive text-destructive-foreground hover:opacity-90',
+    quiet: 'border border-border bg-transparent text-muted-foreground hover:bg-accent hover:text-foreground',
+    link: 'text-muted-foreground underline underline-offset-2 hover:text-foreground',
   }[variant]
-  const sizing = size === 'sm' ? 'h-8 px-3 text-[13px]' : 'h-9 px-4 text-sm'
+  const sizing = variant === 'link' ? 'text-[13px]' : size === 'sm' ? 'h-8 px-3 text-[13px]' : 'h-9 px-4 text-sm'
   return (
     <button
       className={`inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-md font-medium disabled:pointer-events-none disabled:opacity-50 ${sizing} ${styles} ${className}`}
       {...props}
     />
+  )
+}
+
+// Banner: a dismissible success notice at the top of a page.
+export function Banner({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }) {
+  return (
+    <div role="status" className="flex items-center justify-between gap-4 bg-success px-3.5 py-2.5 text-sm text-success-foreground">
+      <span>{children}</span>
+      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="px-1 text-base leading-none hover:opacity-70">×</button>
+    </div>
   )
 }
 
@@ -353,3 +366,4 @@ export function useLoad<T>(path: string | null) {
 
 // rowsOf: loading → null (skeletons); load error with no data → [] so the table still renders.
 export const rowsOf = <T,>(l: { data: T[] | null; error: string }): T[] | null => l.data ?? (l.error ? [] : null)
+

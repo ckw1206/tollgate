@@ -8,7 +8,7 @@ import Groups from './pages/Groups'
 import Invite from './pages/Invite'
 import Invites from './pages/Invites'
 import Keys from './pages/Keys'
-import Login from './pages/Login'
+import Landing from './pages/Landing'
 import Models from './pages/Models'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
@@ -29,7 +29,8 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<Landing />} />
+          <Route path="/setup" element={<Landing setupRoute />} />
           <Route path="/invite/:token" element={<Invite />} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route index element={<Gate perm="spend:read_own"><Dashboard /></Gate>} />

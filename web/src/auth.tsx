@@ -12,12 +12,16 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null)
 
+// isLandingPreview: /login?preview=1 (Settings → Preview) shows what signed-out visitors
+// see and loads only the public landing info, so the session isn't fetched there.
+export const isLandingPreview = () => window.location.pathname === '/login' && new URLSearchParams(window.location.search).has('preview')
+
 // Permissions come only from GET /auth/me; never branch on user.role.
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [me, setMe] = useState<Me | null | undefined>(undefined)
+  const [me, setMe] = useState<Me | null | undefined>(() => (isLandingPreview() ? null : undefined))
   const refresh = useCallback(() => api<Me>('/auth/me').then(setMe, () => setMe(null)), [])
   useEffect(() => {
-    refresh()
+    if (!isLandingPreview()) refresh()
   }, [refresh])
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
