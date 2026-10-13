@@ -17,12 +17,9 @@ There is no rotation tool. When the server starts with a different key:
 - each model using it logs `skipping model: credential unavailable` and is not served;
 - the server still starts.
 
-Credentials can't be edited in place, and one can't be deleted while a model uses it. To rotate, start with the new key, then for each credential:
-1. Create a new credential with the same provider, endpoint and secret.
-2. Edit each model that used the old credential to use the new one.
-3. Delete the old credential.
+To rotate, start with the new key, then edit each credential, choose **Replace** and paste its secret again. Models keep using the same credential. Until then, a credential whose secret no longer decrypts can't be renamed or tested with its saved secret.
 
-Creating or deleting a credential and editing a model all reload the model registry, so no restart is needed.
+The same Edit → Replace rotates a provider's API key. Creating, editing or deleting a credential and editing a model all reload the model registry, so no restart is needed.
 
 ## API key rotation
 

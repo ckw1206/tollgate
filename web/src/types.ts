@@ -64,6 +64,8 @@ export interface Credential {
   api_base: string // '' = provider default
   vertex_project: string
   vertex_location: string
+  used_by: string[] // model names
+  secret_updated_at: string
   created_at: string
 }
 

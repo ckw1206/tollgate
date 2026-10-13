@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
 import { api } from '../api'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
@@ -54,7 +54,16 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
   )
 }
 
-export function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: ReactNode; onClose: () => void; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null)
+  // Move focus into the dialog on open (unless a field autofocused), and back to the opener on close.
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null
+    if (!box.current?.contains(document.activeElement)) {
+      box.current?.querySelector<HTMLElement>('input:not([disabled]):not([readonly]), select, textarea, button')?.focus()
+    }
+    return () => opener?.focus()
+  }, [])
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -63,13 +72,15 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-background/50 p-4 pt-16 backdrop-blur-[4px]" onClick={onClose}>
       <div
+        ref={box}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         className="w-full max-w-[512px] rounded-md border border-border bg-background p-6 shadow-dialog"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="mb-4 text-lg font-semibold">{title}</h2>
+        <h2 className={`${subtitle ? 'mb-1' : 'mb-4'} text-lg font-semibold`}>{title}</h2>
+        {subtitle && <p className="mb-4 text-[13px] text-muted-foreground">{subtitle}</p>}
         {children}
       </div>
     </div>
@@ -77,7 +88,7 @@ export function Modal({ title, onClose, children }: { title: string; onClose: ()
 }
 
 export function ModalFooter({ children }: { children: ReactNode }) {
-  return <div className="mt-6 flex justify-end gap-2">{children}</div>
+  return <div className="mt-6 flex flex-wrap justify-end gap-2">{children}</div>
 }
 
 // ConfirmDialog replaces window.confirm. Title = verb + quoted name + "?",
@@ -399,6 +410,177 @@ export function InlineCopy({ label, value }: { label: string; value: string }) {
       <button type="button" onClick={() => navigator.clipboard.writeText(value).then(() => setCopied(true), () => undefined)} className="border-l border-input px-3 text-[13px] font-medium hover:bg-accent">
         {copied ? 'Copied' : 'Copy'}
       </button>
+    </div>
+  )
+}
+
+export interface MultiOption {
+  id: string
+  label: string
+  meta?: string // right-aligned, muted
+}
+
+// MultiSelect: wrapping chips + a popover listbox with search, an "All" row and a
+// "N selected · Clear" footer. value [] means All. Keyboard: Enter/Space/↓ opens, ↑↓ move,
+// Space or Enter toggles, Esc closes, Backspace (empty search or on the trigger) drops the
+// last chip. staleIds are picks that are no longer options: shown as warning chips.
+export function MultiSelect({ options, value, onChange, allLabel, allHint, renderOption, staleIds = [], labelledBy }: {
+  options: MultiOption[]
+  value: string[]
+  onChange: (v: string[]) => void
+  allLabel: string
+  allHint?: string
+  renderOption?: (o: MultiOption) => ReactNode
+  staleIds?: string[]
+  labelledBy?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0) // 0 = All row (when shown), then the filtered options
+  const wrap = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const id = useId()
+  const byId = new Map(options.map((o) => [o.id, o]))
+  const q = query.trim().toLowerCase()
+  const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options
+  const rows: (MultiOption | null)[] = q ? shown : [null, ...shown] // null = All
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => wrap.current && !wrap.current.contains(e.target as Node) && setOpen(false)
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const show = () => {
+    setQuery('')
+    setActive(0)
+    setOpen(true)
+  }
+  const close = () => {
+    setOpen(false)
+    trigger.current?.focus()
+  }
+  const toggle = (o: MultiOption | null) => {
+    if (!o) return onChange([]) // All clears the picks
+    onChange(value.includes(o.id) ? value.filter((v) => v !== o.id) : [...value, o.id])
+  }
+  const onListKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const k = e.key
+    if (k === 'ArrowDown' || k === 'ArrowUp') {
+      e.preventDefault()
+      setActive((a) => Math.max(0, Math.min(rows.length - 1, a + (k === 'ArrowDown' ? 1 : -1))))
+    } else if ((k === ' ' || k === 'Enter') && rows[active] !== undefined) {
+      e.preventDefault() // Space toggles rather than typing; model names have no spaces
+      toggle(rows[active])
+    } else if (k === 'Escape') {
+      e.stopPropagation() // close the popover, not the dialog around it
+      close()
+    } else if (k === 'Backspace' && !query && value.length) {
+      onChange(value.slice(0, -1))
+    } else if (k === 'Tab') {
+      setOpen(false)
+    }
+  }
+  const optionId = (i: number) => `${id}-opt-${i}`
+
+  return (
+    <div ref={wrap} className="relative mt-1">
+      <div className={controlCls + ' flex min-h-9 w-full flex-wrap items-center gap-1.5 py-1 text-sm'}>
+        {value.map((v) => {
+          const stale = staleIds.includes(v)
+          return (
+            <span
+              key={v}
+              title={stale ? 'No longer available' : undefined}
+              className={`inline-flex items-center gap-1 rounded-sm py-0.5 pl-2 pr-1 font-mono text-xs ${stale ? 'bg-warning text-warning-foreground' : 'bg-secondary text-secondary-foreground'}`}
+            >
+              {byId.get(v)?.label ?? v}
+              <button type="button" aria-label={`Remove ${v}`} className="px-0.5 leading-none hover:opacity-70" onClick={() => onChange(value.filter((x) => x !== v))}>×</button>
+            </span>
+          )
+        })}
+        <button
+          ref={trigger}
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-labelledby={labelledBy}
+          className="flex min-w-[6rem] flex-1 items-center justify-between gap-2 self-stretch text-left outline-none"
+          onClick={() => (open ? setOpen(false) : show())}
+          onKeyDown={(e) => {
+            if (e.key === 'Backspace' && value.length) onChange(value.slice(0, -1))
+            else if (e.key === 'ArrowDown' && !open) {
+              e.preventDefault()
+              show()
+            }
+          }}
+        >
+          {value.length === 0 ? (
+            <span>{allLabel}{allHint && <span className="text-muted-foreground"> · {allHint}</span>}</span>
+          ) : <span className="sr-only">Edit selection</span>}
+          <span aria-hidden className="text-muted-foreground">▾</span>
+        </button>
+      </div>
+      {open && (
+        <div className="absolute inset-x-0 top-full z-10 mt-1 rounded-md border border-border bg-background shadow-dialog">
+          <input
+            autoFocus
+            role="combobox"
+            aria-expanded="true"
+            aria-controls={`${id}-list`}
+            aria-activedescendant={rows.length ? optionId(active) : undefined}
+            aria-label="Search"
+            placeholder="Search…"
+            className="block h-9 w-full border-b border-border bg-transparent px-3 text-sm outline-none"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActive(0)
+            }}
+            onKeyDown={onListKey}
+          />
+          <ul id={`${id}-list`} role="listbox" aria-multiselectable="true" aria-labelledby={labelledBy} className="max-h-60 overflow-y-auto py-1">
+            {rows.map((o, i) => {
+              const checked = o ? value.includes(o.id) : value.length === 0
+              return (
+                <li
+                  key={o?.id ?? '*all'}
+                  id={optionId(i)}
+                  role="option"
+                  aria-selected={checked}
+                  className={`flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm ${i === active ? 'bg-accent' : ''}`}
+                  onMouseEnter={() => setActive(i)}
+                  onMouseDown={(e) => e.preventDefault()} // keep focus in the search box
+                  onClick={() => toggle(o)}
+                >
+                  <span aria-hidden className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border text-[10px] ${checked ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>
+                    {checked && '✓'}
+                  </span>
+                  {o ? (
+                    <>
+                      <span className="min-w-0 flex-1 truncate">{renderOption ? renderOption(o) : <span className="font-mono text-xs">{o.label}</span>}</span>
+                      {o.meta && <span className="text-xs text-muted-foreground">{o.meta}</span>}
+                    </>
+                  ) : (
+                    <span className="flex-1">{allLabel}{allHint && <span className="text-xs text-muted-foreground"> · {allHint}</span>}</span>
+                  )}
+                </li>
+              )
+            })}
+            {rows.length === 0 && <li className="px-3 py-1.5 text-sm text-muted-foreground">No matches.</li>}
+          </ul>
+          <div className="flex items-center gap-1.5 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+            <span>{value.length ? `${value.length} selected` : allLabel}</span>
+            {value.length > 0 && (
+              <>
+                <span aria-hidden>·</span>
+                <Button type="button" variant="link" className="text-xs" onClick={() => onChange([])}>Clear</Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
