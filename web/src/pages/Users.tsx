@@ -1,0 +1,110 @@
+import { useState } from 'react'
+import { api, short, when } from '../api'
+import { useAuth } from '../auth'
+import InviteDialog from '../components/InviteDialog'
+import { Badge, Button, ConfirmDialog, controlCls, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad } from '../components/ui'
+import type { Group, User } from '../types'
+
+const inlineSelect = controlCls + ' h-7 py-0 text-[13px]'
+
+export default function Users() {
+  const { me, can } = useAuth()
+  const users = useLoad<User[]>('/console/api/v1/users')
+  const groups = useLoad<Group[]>('/console/api/v1/groups')
+  const writable = can('users:write')
+  const [error, setError] = useState('')
+  const [inviting, setInviting] = useState(false)
+  const [url, setUrl] = useState('')
+  const [disabling, setDisabling] = useState<User | null>(null)
+
+  const update = (u: User, patch: Partial<Pick<User, 'role' | 'group_id' | 'disabled'>>) =>
+    api(`/console/api/v1/users/${u.id}`, { method: 'PUT', body: patch }).finally(users.reload)
+  const inline = (u: User, patch: Partial<Pick<User, 'role' | 'group_id' | 'disabled'>>) => {
+    setError('')
+    update(u, patch).catch((e: Error) => setError(e.message))
+  }
+  const groupName = (id: string) => groups.data?.find((g) => g.id === id)?.name ?? short(id)
+  const editable = (u: User) => writable && u.id !== me?.user.id // never your own row
+
+  return (
+    <>
+      <PageHeader
+        title="Users"
+        description="Tollgate is invite-only — there is no create-user API. Invite people from here or from Invites."
+      >
+        {can('invites:write') && <Button disabled={!groups.data} onClick={() => setInviting(true)}>Invite user</Button>}
+      </PageHeader>
+      <div className="mb-4 space-y-1">
+        <ErrorText>{users.error}</ErrorText>
+        <ErrorText>{error}</ErrorText>
+      </div>
+      <Table
+        rows={rowsOf(users)}
+        empty="No users yet."
+        cols={[
+          { head: 'Name', cell: (u) => u.name },
+          { head: 'Email', cell: (u) => u.email },
+          {
+            head: 'Role',
+            cell: (u) =>
+              editable(u) ? (
+                <select aria-label={`Role for ${u.email}`} className={inlineSelect} value={u.role} onChange={(e) => inline(u, { role: e.target.value as User['role'] })}>
+                  <option value="admin">admin</option>
+                  <option value="member">member</option>
+                  <option value="viewer">viewer</option>
+                </select>
+              ) : (
+                u.role
+              ),
+          },
+          {
+            head: 'Group',
+            cell: (u) =>
+              editable(u) && groups.data ? (
+                <select aria-label={`Group for ${u.email}`} className={inlineSelect} value={u.group_id} onChange={(e) => inline(u, { group_id: e.target.value })}>
+                  {groups.data.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              ) : (
+                groupName(u.group_id)
+              ),
+          },
+          { head: 'Joined', cell: (u) => when(u.created_at) },
+          { head: 'Status', cell: (u) => (u.disabled ? <Badge tone="error">disabled</Badge> : <Badge tone="success">active</Badge>) },
+          {
+            head: '',
+            cell: (u) =>
+              editable(u) && (
+                <RowActions>
+                  {u.disabled ? (
+                    <Button size="sm" variant="ghost" onClick={() => inline(u, { disabled: false })}>Enable</Button>
+                  ) : (
+                    <Button size="sm" variant="danger" onClick={() => setDisabling(u)}>Disable</Button>
+                  )}
+                </RowActions>
+              ),
+          },
+        ]}
+      />
+      {inviting && groups.data && (
+        <InviteDialog
+          groups={groups.data}
+          onClose={() => setInviting(false)}
+          onCreated={(u) => {
+            setInviting(false)
+            setUrl(u)
+          }}
+        />
+      )}
+      {url && <SecretDialog title="Invite link" body="Send this link to the invitee. It works once." value={url} onClose={() => setUrl('')} />}
+      {disabling && (
+        <ConfirmDialog
+          title={`Disable "${disabling.email}"?`}
+          body="They're signed out and their API keys stop working immediately."
+          confirm="Disable"
+          onConfirm={() => update(disabling, { disabled: true })}
+          onClose={() => setDisabling(null)}
+        />
+      )}
+    </>
+  )
+}
