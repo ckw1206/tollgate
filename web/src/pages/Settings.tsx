@@ -3,7 +3,8 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import { ICON_TYPES, iconFromFile } from '../icon'
 import { BrandIcon } from '../Layout'
-import { Button, ErrorText, Field, inputCls, PageHeader, useLoad } from '../components/ui'
+import { DEFAULT_HEADLINE, DEFAULT_TAGLINE } from '../components/LandingShell'
+import { Button, controlCls, ErrorText, Field, inputCls, PageHeader, useLoad } from '../components/ui'
 import type { Settings as S } from '../types'
 
 // Browsers omit UTC from their zone list, but it's the server default and a valid choice.
@@ -52,7 +53,7 @@ export default function Settings() {
     setMsg('')
     setForm((f) => f && { ...f, ...patch })
   }
-  const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => update({ [k]: e.target.value })
+  const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => update({ [k]: e.target.value })
 
   const pickIcon = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
@@ -84,13 +85,13 @@ export default function Settings() {
               <>
                 <input ref={fileRef} type="file" accept={ICON_TYPES.join(',')} className="hidden" aria-label="Icon file" onChange={pickIcon} />
                 <Button type="button" variant="ghost" size="sm" onClick={() => fileRef.current?.click()}>Upload icon…</Button>
-                <Button type="button" variant="ghost" size="sm" disabled={form.server_icon === ''} onClick={() => { setIconError(''); update({ server_icon: '' }) }}>
+                <Button type="button" variant="link" disabled={form.server_icon === ''} onClick={() => { setIconError(''); update({ server_icon: '' }) }}>
                   Reset to default
                 </Button>
               </>
             )}
           </div>
-          {!ro && <span className="mt-1 block text-xs text-muted-foreground">Square PNG, JPEG or WebP, at least 128 × 128 px, up to 256 KB. Saved with the form.</span>}
+          {!ro && <span className="mt-1 block text-xs text-muted-foreground">PNG, JPEG or WebP · square · min 128×128 · max 256 KB</span>}
           <div className="mt-1"><ErrorText>{iconError}</ErrorText></div>
         </div>
         <Field label="Timezone" hint="Daily/monthly budgets reset at midnight in this timezone.">
@@ -99,6 +100,20 @@ export default function Settings() {
           </select>
         </Field>
         <Field label="Currency label" hint="Display only; no conversion."><input className={inputCls} required disabled={ro} value={form.currency} onChange={set('currency')} /></Field>
+        <section aria-label="Landing page" className="space-y-3 border-t border-border pt-4">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold">Landing page</h2>
+            <a href="/login?preview=1" target="_blank" rel="noopener" className="text-[13px] text-link-foreground underline underline-offset-2 hover:text-foreground">
+              Preview ↗
+            </a>
+          </div>
+          <Field label="Headline" hint="Shown on the sign-in and setup page. Max 80 characters · blank = default.">
+            <input className={inputCls} maxLength={80} disabled={ro} placeholder={DEFAULT_HEADLINE} value={form.landing_headline} onChange={set('landing_headline')} />
+          </Field>
+          <Field label="Tagline" hint="Max 160 characters · plain text, no links.">
+            <textarea className={controlCls + ' mt-1 block h-16 w-full resize-y py-1 text-sm'} maxLength={160} disabled={ro} placeholder={DEFAULT_TAGLINE} value={form.landing_tagline} onChange={set('landing_tagline')} />
+          </Field>
+        </section>
         <ErrorText>{error}</ErrorText>
         {msg && <p className="text-sm text-success-foreground">{msg}</p>}
         {!ro && <Button disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>}

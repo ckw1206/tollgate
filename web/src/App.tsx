@@ -4,11 +4,12 @@ import Layout from './Layout'
 import Audit from './pages/Audit'
 import Credentials from './pages/Credentials'
 import Dashboard from './pages/Dashboard'
+import Docs from './pages/Docs'
 import Groups from './pages/Groups'
 import Invite from './pages/Invite'
 import Invites from './pages/Invites'
 import Keys from './pages/Keys'
-import Login from './pages/Login'
+import Landing from './pages/Landing'
 import Models from './pages/Models'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
@@ -29,11 +30,13 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          <Route path="/login" element={<Login />} />
+          <Route path="/login" element={<Landing />} />
+          <Route path="/setup" element={<Landing setupRoute />} />
           <Route path="/invite/:token" element={<Invite />} />
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route index element={<Gate perm="spend:read_own"><Dashboard /></Gate>} />
             {pages.map((p) => <Route key={p.path} path={p.path} element={<Gate perm={p.perm}>{p.el}</Gate>} />)}
+            <Route path="docs" element={<Docs />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

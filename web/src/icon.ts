@@ -21,20 +21,20 @@ function magicMatches(type: string, b: Uint8Array) {
 }
 
 export async function iconFromFile(f: File): Promise<string> {
-  if (!ICON_TYPES.includes(f.type)) throw new Error('Use a PNG, JPEG or WebP image.')
-  if (f.size > MAX_BYTES) throw new Error('The image must be 256 KB or smaller.')
-  if (!magicMatches(f.type, new Uint8Array(await f.slice(0, 12).arrayBuffer()))) throw new Error("This file isn't a valid PNG, JPEG or WebP image.")
+  if (!ICON_TYPES.includes(f.type)) throw new Error(`${f.name} isn't supported. Use PNG, JPEG or WebP.`)
+  if (f.size > MAX_BYTES) throw new Error('Icon must be 256 KB or smaller.')
+  if (!magicMatches(f.type, new Uint8Array(await f.slice(0, 12).arrayBuffer()))) throw new Error(`${f.name} isn't a valid PNG, JPEG or WebP image.`)
 
   let bmp: ImageBitmap
   try {
     bmp = await createImageBitmap(f)
   } catch {
-    throw new Error("This file isn't a valid PNG, JPEG or WebP image.")
+    throw new Error(`${f.name} isn't a valid PNG, JPEG or WebP image.`)
   }
   const { width: w, height: h } = bmp
   try {
-    if (Math.abs(w - h) / Math.max(w, h) > 0.05) throw new Error('The image must be square.')
-    if (Math.min(w, h) < MIN_SIDE) throw new Error(`The image must be at least ${MIN_SIDE} × ${MIN_SIDE} pixels.`)
+    if (Math.abs(w - h) / Math.max(w, h) > 0.05) throw new Error('Icon must be square.')
+    if (Math.min(w, h) < MIN_SIDE) throw new Error(`Icon must be at least ${MIN_SIDE}×${MIN_SIDE}.`)
 
     // Center-crop the (nearly) square image and scale it to 256×256.
     const side = Math.min(w, h)
@@ -46,7 +46,7 @@ export async function iconFromFile(f: File): Promise<string> {
     ctx.drawImage(bmp, (w - side) / 2, (h - side) / 2, side, side, 0, 0, OUT_SIDE, OUT_SIDE)
     const url = canvas.toDataURL('image/png')
     // A 256×256 PNG of pure noise can exceed the server's cap; say so instead of a raw 400.
-    if (((url.length - url.indexOf(',') - 1) * 3) / 4 > MAX_BYTES) throw new Error('This image is too detailed for an icon. Try a simpler one.')
+    if (((url.length - url.indexOf(',') - 1) * 3) / 4 > MAX_BYTES) throw new Error('Icon is too detailed to fit in 256 KB. Try a simpler image.')
     return url
   } finally {
     bmp.close()

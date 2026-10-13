@@ -55,7 +55,7 @@ export function Version({ server }: { server: ServerInfo }) {
   )
 }
 
-function Identity({ onSignOut }: { onSignOut: () => void }) {
+function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate?: () => void }) {
   const { me } = useAuth()
   const [mode, setMode] = useTheme()
   if (!me) return null
@@ -70,6 +70,16 @@ function Identity({ onSignOut }: { onSignOut: () => void }) {
         <span>Theme</span>
         <Segmented small label="Theme" value={mode} onChange={setMode} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
       </div>
+      <NavLink
+        to="/docs"
+        onClick={onNavigate}
+        className={({ isActive }) =>
+          `mt-0.5 flex justify-between border-t border-sidebar-border pt-2.5 text-xs font-medium ${isActive ? 'text-primary' : 'text-foreground hover:text-muted-foreground'}`
+        }
+      >
+        <span>API docs</span>
+        <span aria-hidden>→</span>
+      </NavLink>
       <Version server={me.server} />
     </div>
   )
@@ -106,7 +116,7 @@ export default function Layout() {
             </button>
             {menu && (
               <div className="absolute right-0 top-10 z-40 w-64 border border-border bg-background p-4 shadow-dialog">
-                <Identity onSignOut={signOut} />
+                <Identity onSignOut={signOut} onNavigate={() => setMenu(false)} />
               </div>
             )}
           </div>

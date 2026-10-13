@@ -9,6 +9,10 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-primary-highlight: var(--primary-highlight);
+  --color-primary-highlight-foreground: var(--primary-highlight-foreground);
+  --color-link-foreground: var(--link-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
@@ -33,6 +37,7 @@
   --font-sans: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --shadow-dialog: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  --shadow-landing-card: 0 10px 30px -10px rgba(40, 48, 30, 0.25);
 }
 
 /* Mira's light tokens are tuned for dark surfaces (near-white primary, translucent-white
@@ -70,4 +75,18 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Landing (/login, /setup, /invite): always light Mira over the illustrated backdrop. */
+.landing-bg {
+  background-color: #eceee6;
+  background-image: url('/landing-bg.webp');
+  background-size: cover;
+  background-position: center bottom;
+  background-repeat: no-repeat;
+}
+
+html.landing-boot,
+html.landing-boot body {
+  background: #eceee6;
 }
