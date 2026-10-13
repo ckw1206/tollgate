@@ -88,3 +88,28 @@ func TestLoginThrottle_ByIPAndByEmail(t *testing.T) {
 		t.Fatal("lock should expire")
 	}
 }
+
+func TestSetupThrottle_ByIPOnlyAndSeparateFromLogin(t *testing.T) {
+	c, mr := newTest(t)
+	ctx := context.Background()
+	for i := 0; i < SetupMaxFailures; i++ {
+		if blocked, _ := c.SetupBlocked(ctx, "1.2.3.4"); blocked {
+			t.Fatalf("blocked after %d failures", i)
+		}
+		if err := c.RecordSetupFailure(ctx, "1.2.3.4"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if blocked, _ := c.SetupBlocked(ctx, "1.2.3.4"); !blocked {
+		t.Fatal("not blocked at the limit")
+	}
+	if blocked, _ := c.SetupBlocked(ctx, "5.6.7.8"); blocked {
+		t.Fatal("another IP is blocked")
+	}
+	if ttl := mr.TTL("setupfail:ip:1.2.3.4"); ttl <= 0 || ttl > SetupWindow {
+		t.Fatalf("ttl %v", ttl)
+	}
+	if blocked, _ := c.LoginBlocked(ctx, "1.2.3.4", "victim@x.io"); blocked {
+		t.Fatal("setup failures leaked into the sign-in throttle")
+	}
+}

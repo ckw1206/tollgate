@@ -11,10 +11,10 @@ cp .env.example .env
 sed -i '' "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env   # Linux: sed -i
 VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose up -d --build
 until curl -sf localhost:4000/health >/dev/null; do sleep 1; done
-docker compose exec tollgate /tollgate admin create --email you@example.com --name You   # prompts for a password (min 12 chars)
+docker compose logs tollgate | grep 'First-run setup'   # one-time link to create the first admin
 ```
 
-Open `BASE_URL` (default `http://localhost:4000`) and sign in.
+Open that link (it pre-fills a setup token that changes on every restart until an admin exists) and create the first admin. Headless? `docker compose exec tollgate /tollgate admin create --email you@example.com --name You` does the same and prompts for a password (min 12 chars).
 
 Over plain `http` on anything other than `localhost` (and in Safari even on localhost), browsers drop the `Secure` session cookie and login appears to do nothing. Set `COOKIE_INSECURE=true` in `.env` for local testing only. In production, serve over HTTPS and leave it `false`.
 

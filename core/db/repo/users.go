@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -64,6 +65,45 @@ func createUser(ctx context.Context, q rowQuerier, email, name, password, role, 
 		VALUES ($1, $2, $3, $4, $5) RETURNING `+userCols,
 		strings.ToLower(strings.TrimSpace(email)), name, h, role, groupID))
 	return u, conflict(err)
+}
+
+func (s *Store) CountUsers(ctx context.Context) (n int, err error) {
+	err = s.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+// bootstrapLock is the pg_advisory_xact_lock key that serializes first-run setups.
+const bootstrapLock int64 = 0x746f6c6c67617465 // "tollgate"
+
+// BootstrapAdmin creates the first user, an admin in the default group, only while
+// the users table is empty; otherwise it returns ErrAlreadySetUp. The advisory lock
+// is needed because under READ COMMITTED two concurrent INSERT … WHERE NOT EXISTS
+// can both see an empty table; with it, the second runs after the first commits.
+func (s *Store) BootstrapAdmin(ctx context.Context, email, name, password string) (*User, error) {
+	h, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bootstrapLock); err != nil {
+		return nil, err
+	}
+	u, err := scanUser(tx.QueryRow(ctx, `
+		INSERT INTO users (email, name, password_hash, role, group_id)
+		SELECT $1::text, $2::text, $3::text, 'admin'::user_role, g.id FROM groups g
+		WHERE g.name = 'default' AND NOT EXISTS (SELECT 1 FROM users)
+		RETURNING `+userCols,
+		strings.ToLower(strings.TrimSpace(email)), name, h))
+	if errors.Is(err, ErrNotFound) {
+		return nil, ErrAlreadySetUp
+	} else if err != nil {
+		return nil, conflict(err)
+	}
+	return u, tx.Commit(ctx)
 }
 
 func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"tollgate/core/api"
 	"tollgate/core/db/repo"
@@ -66,6 +67,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validIcon(in.ServerIcon) {
 		badRequest(w, "server_icon must be empty or a PNG, JPEG or WebP data URL of at most 256 KB")
+		return
+	}
+	if utf8.RuneCountInString(in.LandingHeadline) > 80 || utf8.RuneCountInString(in.LandingTagline) > 160 {
+		badRequest(w, "landing_headline is limited to 80 characters and landing_tagline to 160")
 		return
 	}
 	before, _ := s.Store.GetSettings(r.Context())

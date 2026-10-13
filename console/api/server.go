@@ -25,7 +25,8 @@ type Server struct {
 	Reload          func(context.Context) error // rebuild the model registry after model/credential writes
 	BaseURL         string
 	TrustedProxies  []netip.Prefix
-	Version, Commit string // build info for /auth/me, set by main from -ldflags
+	Version, Commit string      // build info for /auth/me, set by main from -ldflags
+	Setup           *SetupToken // first-run setup token; nil when users existed at startup
 }
 
 const p = "/console/api/v1"
@@ -38,6 +39,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 		"GET /auth/me":                    req("", s.me),
 		"GET /auth/invite/{token}":        http.HandlerFunc(s.inviteInfo),
 		"POST /auth/invite/{token}":       http.HandlerFunc(s.inviteAccept),
+		"GET /auth/setup":                 http.HandlerFunc(s.setupNeeded),
+		"POST /auth/setup":                http.HandlerFunc(s.setup),
+		"GET /auth/landing":               http.HandlerFunc(s.landing),
 		"GET " + p + "/invites":           req(rbac.InvitesRead, s.listInvites),
 		"POST " + p + "/invites":          req(rbac.InvitesWrite, s.createInvite),
 		"DELETE " + p + "/invites/{id}":   req(rbac.InvitesWrite, s.revokeInvite),

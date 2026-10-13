@@ -31,20 +31,33 @@ type tenv struct {
 	viewer  *repo.User
 	reloads int
 	cookies map[string]*http.Cookie
+	setup   *SetupToken // non-nil only from newEmptyTenv, like main
+	token   string      // setup's raw token
+	redis   *miniredis.Miniredis
 }
 
-func newTenv(t *testing.T) *tenv {
+func newTenv(t *testing.T) *tenv { return buildTenv(t, true) }
+
+// newEmptyTenv starts with no users, so the server holds a first-run setup token.
+func newEmptyTenv(t *testing.T) *tenv { return buildTenv(t, false) }
+
+func buildTenv(t *testing.T, withUsers bool) *tenv {
 	s := repo.New(dbtest.New(t))
 	ctx := context.Background()
 	g, _ := s.GetGroupByName(ctx, "default")
 	e := &tenv{t: t, store: s, group: g, cookies: map[string]*http.Cookie{}}
-	e.admin, _ = s.CreateUser(ctx, "admin@x.io", "Admin", "hunter22hunter22", "admin", g.ID)
-	e.member, _ = s.CreateUser(ctx, "member@x.io", "Member", "hunter22hunter22", "member", g.ID)
-	e.viewer, _ = s.CreateUser(ctx, "viewer@x.io", "Viewer", "hunter22hunter22", "viewer", g.ID)
+	if withUsers {
+		e.admin, _ = s.CreateUser(ctx, "admin@x.io", "Admin", "hunter22hunter22", "admin", g.ID)
+		e.member, _ = s.CreateUser(ctx, "member@x.io", "Member", "hunter22hunter22", "member", g.ID)
+		e.viewer, _ = s.CreateUser(ctx, "viewer@x.io", "Viewer", "hunter22hunter22", "viewer", g.ID)
+	} else {
+		e.setup, e.token = NewSetupToken()
+	}
 	mr := miniredis.RunT(t)
+	e.redis = mr
 	c := cache.FromClient(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
 	v, _ := vault.New(bytes.Repeat([]byte{3}, 32))
-	srv := &Server{Store: s, Cache: c, Vault: v, BaseURL: base,
+	srv := &Server{Store: s, Cache: c, Vault: v, BaseURL: base, Setup: e.setup,
 		Version: "v0.0.0-test", Commit: "0123456789abcdef0123456789abcdef01234567",
 		Sessions: &auth.Sessions{Cache: c, Store: s, TTL: time.Hour},
 		Reload:   func(context.Context) error { e.reloads++; return nil }}

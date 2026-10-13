@@ -201,3 +201,27 @@ func TestSettings_IconMustBeImageDataURL(t *testing.T) {
 		t.Fatalf("audit entry should show an icon digest: %+v", entries)
 	}
 }
+
+func TestSettings_LandingCopy(t *testing.T) {
+	e := newTenv(t)
+	put := func(headline, tagline string) *httptest.ResponseRecorder {
+		return e.as("admin@x.io", "PUT", "/console/api/v1/settings", map[string]string{"server_name": "Mine", "timezone": "UTC",
+			"currency": "USD", "landing_headline": headline, "landing_tagline": tagline})
+	}
+	for _, bad := range [][2]string{{strings.Repeat("a", 81), ""}, {"", strings.Repeat("a", 161)}, {strings.Repeat("閘", 81), ""}} {
+		w := put(bad[0], bad[1])
+		if code := decodeInto[struct{ Error struct{ Code string } }](t, w).Error.Code; w.Code != 400 || code != "invalid_request" {
+			t.Fatalf("too long accepted: %d %s", w.Code, w.Body)
+		}
+	}
+	// Limits count characters, not bytes: 80 and 160 three-byte runes fit.
+	h, tg := strings.Repeat("閘", 80), strings.Repeat("門", 160)
+	if w := put(h, tg); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	st := decodeInto[repo.Settings](t, e.as("admin@x.io", "GET", "/console/api/v1/settings", nil))
+	l := decodeInto[map[string]string](t, e.raw("", "GET", "/auth/landing", nil))
+	if st.LandingHeadline != h || st.LandingTagline != tg || l["landing_headline"] != h || l["landing_tagline"] != tg || l["server_name"] != "Mine" {
+		t.Fatalf("round trip: %+v %v", st, l)
+	}
+}

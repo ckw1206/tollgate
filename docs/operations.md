@@ -34,6 +34,13 @@ Owners (and admins, for any key) rotate a key from the console: **API keys → R
 - When an admin rotates someone else's key, the admin receives the new secret; usage still bills to the owner, and the `key.rotate` audit entry records the admin as the actor.
 - Rotation copies the expiry. If a key is about to expire, rotate it, then edit the new key's **Expires on**.
 
+## First-run setup
+
+While the users table is empty, `serve` generates a one-time setup token at startup and logs it once at WARN: `First-run setup: {BASE_URL}/setup?token=…`. The token lives only in memory and changes on every restart. Whoever can read the log can create the first admin, so treat the log like a secret until setup is done. `tollgate admin create` is the headless alternative.
+
+- After the first user exists, `POST /auth/setup` returns 409 before doing anything else; the token is discarded.
+- Wrong tokens are throttled per IP: 5 in 15 minutes returns 429 (`setupfail:ip:{ip}` in Redis). Setup never touches the sign-in counters (`loginfail:*`), so the setup form can't lock anyone out of signing in.
+
 ## Upgrades and migrations
 
 Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.

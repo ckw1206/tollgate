@@ -78,6 +78,15 @@ func serve() error {
 		return fmt.Errorf("redis: %w", err)
 	}
 	store := repo.New(d)
+	var setup *consoleapi.SetupToken
+	if n, err := store.CountUsers(ctx); err != nil {
+		return err
+	} else if n == 0 {
+		// The one deliberate secret in the log: whoever can read it can create the first admin.
+		var tok string
+		setup, tok = consoleapi.NewSetupToken()
+		slog.Warn("First-run setup: " + cfg.BaseURL + "/setup?token=" + tok)
+	}
 
 	httpClient := &http.Client{Timeout: 10 * time.Minute}
 	reg := llm.NewRegistry(map[string]llm.Provider{
@@ -118,7 +127,7 @@ func serve() error {
 	mux := http.NewServeMux()
 	(&api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}).Register(mux)
 	(&consoleapi.Server{Store: store, Cache: c, Vault: v, Reload: reload, BaseURL: cfg.BaseURL, TrustedProxies: cfg.TrustedProxies,
-		Version: version, Commit: commit,
+		Version: version, Commit: commit, Setup: setup,
 		Sessions: &auth.Sessions{Cache: c, Store: store, Insecure: cfg.CookieInsecure, TTL: 24 * time.Hour}}).Register(mux)
 	mux.Handle("GET /", web.Handler(web.Dist())) // console SPA; API routes above take precedence
 

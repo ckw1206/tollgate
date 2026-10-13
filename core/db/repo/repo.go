@@ -21,6 +21,7 @@ var (
 	ErrNotFound       = errors.New("not found")
 	ErrConflict       = errors.New("already exists")
 	ErrInviteUnusable = errors.New("invite is expired, revoked, used, or bound to another email")
+	ErrAlreadySetUp   = errors.New("an account already exists")
 )
 
 type Store struct {
