@@ -1,7 +1,7 @@
 import { useEffect, useState, type InputHTMLAttributes, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import { BrandIcon } from '../Layout'
+import { BrandIcon, useUnboot } from '../Layout'
 import type { LandingInfo } from '../types'
 
 // LandingShell is the /welcome page (illustrated backdrop, hero, no form); AuthShell is the
@@ -43,9 +43,6 @@ function HeaderLinks({ className, up, preview }: { className: string; up: boolea
     </nav>
   )
 }
-
-// index.html painted the landing base colour before React mounted; the page owns it now.
-const useUnboot = () => useEffect(() => document.documentElement.classList.remove('landing-boot'), [])
 
 export function LandingShell({ info, cta, preview = false }: {
   info: LandingInfo | null

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './auth'
 import { Segmented, type Tab } from './components/ui'
@@ -91,11 +91,17 @@ function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate
   )
 }
 
+// index.html paints the landing base colour on /login and /setup before React mounts; whichever
+// shell mounts owns the page from then on: the landing and auth shells, or the console when
+// SignIn (or any other route) redirects a signed-in visitor there.
+export const useUnboot = () => useEffect(() => document.documentElement.classList.remove('landing-boot'), [])
+
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?'
 
 export default function Layout() {
   const { me, can, logout: signOut } = useAuth()
   const [menu, setMenu] = useState(false)
+  useUnboot()
   if (!me) return null
   const items = nav.filter((n) => can(n.perm))
   const brand = (
