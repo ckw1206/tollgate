@@ -9,9 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"syscall"
@@ -20,6 +20,7 @@ import (
 
 	"tollgate/core/api"
 	"tollgate/core/db/repo"
+	"tollgate/core/webhook"
 )
 
 // maxIconBytes caps the decoded server_icon image. The console downscales uploads to a
@@ -123,6 +124,36 @@ func auditSettings(st *repo.Settings) *repo.Settings {
 // webhookTestTimeout bounds the test event; a var so tests can shorten it.
 var webhookTestTimeout = 5 * time.Second
 
+// publicHostCheck is the SSRF policy behind the test endpoint: the shared
+// guard from core/webhook, which resolves the host up front and requires
+// EVERY resolved IP to be public (the same allowedIP the production dialer
+// enforces at connect time).
+//
+// It is a var for exactly ONE seam: permitLoopback in settings_test.go swaps
+// it for a loopback-permitting variant so the httptest (127.0.0.1) delivery
+// cases can run; the real guard's rejection behavior is pinned in
+// core/webhook/dialer_test.go and by TestWebhook_SSRFRejected (seam
+// untouched).
+var publicHostCheck = webhook.IsPublicHost
+
+// webhookDialControl is the dial-time re-check for the test client's dialer:
+// the SAME policy (publicHostCheck) as the pre-flight 400, so a name that
+// rebinds to a private IP after the pre-flight is refused at connect time
+// (defense in depth against DNS rebinding).
+func webhookDialControl(network, address string, _ syscall.RawConn) error {
+	if ok, _ := publicHostCheck(address); !ok {
+		return fmt.Errorf("webhook host must be public (loopback, private and link-local addresses are not allowed)")
+	}
+	return nil
+}
+
+// isJSONContentType reports whether the request's Content-Type is
+// application/json (parameters such as charset are ignored).
+func isJSONContentType(r *http.Request) bool {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mt, "application/json")
+}
+
 // testWebhook fires a single synthetic budget crossing at a webhook URL and
 // reports the HTTP outcome synchronously. It is a one-shot probe for the console
 // "Test" button — it does NOT go through the async sender (which is fire-and-forget
@@ -136,32 +167,31 @@ var webhookTestTimeout = 5 * time.Second
 // except 400 (no valid URL / SSRF-rejected host / invalid body URL), 403 (RBAC),
 // 405, 415 in the standard error shape. status is the upstream HTTP status, 0
 // when no upstream response was received (unreachable or timeout).
-// isPublicHostFn defaults to isPublicHost; a var so delivery tests, which run
-// their fake upstream on 127.0.0.1, can permit loopback while the guard's real
-// rejection logic is still covered directly by TestWebhook_PublicHostGuard.
-var isPublicHostFn = isPublicHost
-
-// webhookTestControl is the dialer Control used by the test client. In tests it
-// is swapped for a loopback-permitting variant (see isPublicHostFn) so the
-// httptest-based delivery cases can run.
-var webhookTestControl func(network, address string, c syscall.RawConn) error = func(network, address string, c syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	if !isPublicHostFn(host) {
-		return fmt.Errorf("webhook host must be public (loopback, private and link-local addresses are not allowed)")
-	}
-	return nil
-}
-
+//
+// The SSRF policy (publicHostCheck → core/webhook.IsPublicHost) is shared with
+// the production sender; see permitLoopback in settings_test.go for the single
+// test seam that lets the httptest (127.0.0.1) delivery cases run.
 func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
-	var in struct{ URL string }
-	// The body is optional: an empty body means "test the stored URL" (the SPA
-	// may POST with no body on the "test what's saved" path).
-	if r.ContentLength > 0 {
-		if !decode(w, r, &in) {
+	// Read the optional {url} body. It is read whenever Content-Type is JSON
+	// (including ContentLength == -1: a chunked-encoding body has no declared
+	// length, and skipping it here would silently test the STORED URL instead
+	// of the edited one the console sent). The read is capped; an empty body
+	// means "test the stored URL", non-empty but invalid JSON is a 400, a
+	// valid non-empty url in the body is tested in place of the stored one.
+	var in struct {
+		URL string `json:"url"`
+	}
+	if isJSONContentType(r) {
+		raw, err := io.ReadAll(io.LimitReader(r.Body, 4<<10))
+		if err != nil {
+			badRequest(w, "invalid JSON body")
 			return
+		}
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &in); err != nil {
+				badRequest(w, "invalid JSON body")
+				return
+			}
 		}
 	}
 	u := in.URL
@@ -178,13 +208,15 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// SSRF guard: the probe must only reach public hosts — never loopback,
-	// private or link-local (cloud metadata, internal services).
+	// private or link-local (cloud metadata, internal services). Shared with
+	// the production dialer (core/webhook): one policy, checked here up front
+	// and again at connect time (webhookDialControl).
 	parsed, err := url.Parse(u)
 	if err != nil || parsed.Host == "" {
 		badRequest(w, "invalid webhook URL")
 		return
 	}
-	if !isPublicHostFn(parsed.Host) {
+	if ok, _ := publicHostCheck(parsed.Host); !ok {
 		badRequest(w, "webhook host must be public (loopback, private and link-local addresses are not allowed)")
 		return
 	}
@@ -212,8 +244,9 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	// A dedicated client that doesn't follow redirects: the test reaches only the
 	// validated URL, never a redirect target. The dialer's Control re-checks every
-	// resolved IP (DNS can point a public name at a private one).
-	dialer := &net.Dialer{Control: webhookTestControl}
+	// resolved IP (DNS can point a public name at a private one) — the SAME
+	// shared policy as the pre-flight 400 above.
+	dialer := &net.Dialer{Control: webhookDialControl}
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		Transport: &http.Transport{DialContext: dialer.DialContext, TLSHandshakeTimeout: webhookTestTimeout}}
 	resp, err := client.Do(req)
@@ -238,44 +271,6 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 	// The endpoint answered but rejected the event: still 200, with the upstream
 	// status so the console can show "endpoint returned 404 Not Found".
 	api.WriteJSON(w, 200, map[string]any{"ok": false, "status": resp.StatusCode, "message": "endpoint returned " + resp.Status})
-}
-
-// isPublicHost reports whether a webhook destination host is a public IP
-// (literal) or a name that resolves ONLY to public IPs. It rejects loopback,
-// private (RFC1918 + fc00::/7), link-local (169.254/16, fe80::/10), multicast
-// and unspecified addresses so the test endpoint cannot be used to probe the
-// internal network (cloud metadata, in-cluster services, …).
-//
-// NOTE: stream B adds the equivalent shared dialer in core/webhook/dialer.go
-// for the production sender; dedupe the two on merge.
-func isPublicHost(host string) bool {
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return isPublicIP(ip)
-	}
-	var ips []netip.Addr
-	resolved, err := net.LookupIP(host)
-	if err != nil {
-		return false
-	}
-	for _, ip := range resolved {
-		if a, ok := netip.AddrFromSlice(ip); ok {
-			ips = append(ips, a)
-		}
-	}
-	for _, ip := range ips {
-		if !isPublicIP(ip) {
-			return false
-		}
-	}
-	return len(ips) > 0
-}
-
-func isPublicIP(ip netip.Addr) bool {
-	return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
-		!ip.IsMulticast() && !ip.IsUnspecified()
 }
 
 // redactErr returns a human-readable failure cause from a webhook delivery

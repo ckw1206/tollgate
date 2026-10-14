@@ -109,18 +109,13 @@ func serve() error {
 	}
 
 	// Budget-crossing webhook (#24). The sender is the last hop in the spend path:
-	// Submit never blocks, every delivery failure is logged and dropped. The client
-	// carries its own timeout on top of the sender's per-attempt timeout, a
-	// transport whose dialer refuses internal addresses (SSRF guard: the URL is
-	// admin-configured), and no redirect following — a 3xx must fail loudly, not
-	// be chased as a bodyless GET.
-	webhookClient := &http.Client{
-		Timeout:   5 * time.Second,
-		Transport: webhook.SafeTransport(),
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	// Submit never blocks, every delivery failure is logged and dropped. The
+	// client is built by webhook.NewWebhookClient (the same constructor the
+	// test suite pins): its own timeout on top of the sender's per-attempt
+	// timeout, a transport whose dialer refuses internal addresses (SSRF guard:
+	// the URL is admin-configured), and no redirect following — a 3xx must fail
+	// loudly, not be chased as a bodyless GET.
+	webhookClient := webhook.NewWebhookClient(5 * time.Second)
 	ws := webhook.NewSender(store, webhookClient)
 	wsCtx, wsCancel := context.WithCancel(context.Background())
 	defer wsCancel()

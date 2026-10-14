@@ -1,6 +1,7 @@
 package consoleapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -8,11 +9,11 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"tollgate/core/db/repo"
+	"tollgate/core/webhook"
 )
 
 // putBody builds a full, valid settings payload so a test exercises exactly one
@@ -69,25 +70,28 @@ func setWebhookURL(t *testing.T, e *tenv, url string) {
 	t.Fatalf("could not set budget_webhook_url=%q after %d attempts: %s", url, maxAttempts, last)
 }
 
-// permitLoopback temporarily swaps the webhook test's public-host checks for a
-// loopback-permitting variant so httptest servers (127.0.0.1) can be probed; it
-// returns a restore func. The real guard's rejection behavior is covered
-// directly by TestWebhook_PublicHostGuard.
+// permitLoopback temporarily swaps the ONE SSRF seam (publicHostCheck) for a
+// loopback-permitting variant so httptest servers (127.0.0.1) can be probed;
+// it returns a restore func. The shared guard's real rejection behavior is
+// covered in core/webhook (dialer_test.go) and by TestWebhook_PublicHostGuard
+// and TestWebhook_SSRFRejected (both run with the seam untouched).
 func permitLoopback(t *testing.T) func() {
 	t.Helper()
-	oldHost, oldCtl := isPublicHostFn, webhookTestControl
-	isPublicHostFn = func(host string) bool {
+	old := publicHostCheck
+	publicHostCheck = func(host string) (bool, error) {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
 		if ip := net.ParseIP(host); ip != nil {
-			return true // any IP literal is fine for the delivery cases
+			return true, nil // any IP literal is fine for the delivery cases
 		}
-		return host == "localhost"
+		if host == "localhost" {
+			return true, nil
+		}
+		return false, fmt.Errorf("not a loopback test host")
 	}
-	webhookTestControl = func(network, address string, _ syscall.RawConn) error { return nil }
-	t.Cleanup(func() { isPublicHostFn, webhookTestControl = oldHost, oldCtl })
-	return func() { isPublicHostFn, webhookTestControl = oldHost, oldCtl }
+	t.Cleanup(func() { publicHostCheck = old })
+	return func() { publicHostCheck = old }
 }
 
 func TestSettings_BudgetWebhookURL(t *testing.T) {
@@ -305,8 +309,60 @@ func TestSettings_WebhookTestEvent(t *testing.T) {
 	}
 }
 
+// TestSettings_WebhookTestChunkedBody: a chunked-encoding JSON body (ContentLength
+// == -1) carrying {url} must be honored — before the fix, only bodies with a
+// declared length (ContentLength > 0) were read, so a chunked body was dropped
+// and the STORED URL was silently tested instead.
+func TestSettings_WebhookTestChunkedBody(t *testing.T) {
+	e := newTenv(t)
+	const path = "/console/api/v1/settings/webhook/test"
+	permitLoopback(t)
+
+	// The STORED URL is unreachable (port 1) and the body URL is a live 200
+	// server. If the chunked body were dropped, the probe would fall back to
+	// the stored URL → ok:false / status:0.
+	storedURL := "http://127.0.0.1:1/hook"
+	setWebhookURL(t, e, storedURL)
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer up.Close()
+
+	s, _ := json.Marshal(map[string]any{"url": up.URL + "/hook"})
+	r := httptest.NewRequest("POST", path, strings.NewReader(string(s)))
+	r.Header.Set("Content-Type", "application/json")
+	// Model a chunked-encoding body: a JSON body sent without a known length
+	// reaches the handler with ContentLength == -1. That is exactly the case
+	// the original `ContentLength > 0` gate missed.
+	r.ContentLength = -1
+	if r.ContentLength != -1 {
+		t.Fatalf("precondition: test body must be chunked (ContentLength == -1), got %d", r.ContentLength)
+	}
+	if e.cookies["admin@x.io"] == nil {
+		wl := e.raw("", "POST", "/auth/login", map[string]string{"email": "admin@x.io", "password": "hunter22hunter22"})
+		if wl.Code != 200 {
+			t.Fatalf("login: %d %s", wl.Code, wl.Body)
+		}
+		e.cookies["admin@x.io"] = wl.Result().Cookies()[0]
+	}
+	r.AddCookie(e.cookies["admin@x.io"])
+
+	w := httptest.NewRecorder()
+	e.h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("chunked body: %d %s", w.Code, w.Body)
+	}
+	out := decodeInto[map[string]any](t, w)
+	if out["ok"] != true || out["status"] != 200.0 {
+		t.Fatalf("chunked body was dropped (the stored URL was tested instead): %v", out)
+	}
+}
+
 // C12: the pre-flight public-host check (the dialer's Control re-checks the
-// SAME function at connect time).
+// SAME function at connect time). Runs against the shared guard in
+// core/webhook (the console no longer keeps a local copy).
 func TestWebhook_PublicHostGuard(t *testing.T) {
 	rejected := []string{
 		"127.0.0.1", "127.0.0.1:8080", // loopback
@@ -314,45 +370,54 @@ func TestWebhook_PublicHostGuard(t *testing.T) {
 		"10.0.0.5", "192.168.1.10:8443", // RFC1918
 		"172.16.0.1", "127.1", // 172.16/12, shorthand loopback
 		"::1", "fc00::1", "fe80::1", // IPv6 loopback / ULA / link-local
-		"0.0.0.0", "::", // unspecified
+		"0.0.0.0", "0.255.255.255", "0.0.0.1", // 0.0.0.0/8 ("this network")
+		"100.64.0.1", "100.127.255.255", // CGNAT 100.64.0.0/10
+		"::",                   // unspecified
 		"224.0.0.1", "ff02::1", // multicast
 		"nonexistent-host-tollgate-xyz.invalid", // unresolvable
 	}
 	for _, h := range rejected {
-		if isPublicHost(h) {
-			t.Fatalf("isPublicHost(%q) = true, want false", h)
+		if ok, _ := webhook.IsPublicHost(h); ok {
+			t.Fatalf("IsPublicHost(%q) = true, want false", h)
 		}
 	}
-	public := []string{"8.8.8.8", "8.8.8.8:443", "93.184.216.34", "2001:4860:4860::8888"}
+	public := []string{"8.8.8.8", "8.8.8.8:443", "93.184.216.34", "2001:4860:4860::8888", "1.1.1.1"}
 	for _, h := range public {
-		if !isPublicHost(h) {
-			t.Fatalf("isPublicHost(%q) = false, want true", h)
+		if ok, _ := webhook.IsPublicHost(h); !ok {
+			t.Fatalf("IsPublicHost(%q) = false, want true", h)
 		}
 	}
 }
 
 // C12: rejected hosts get a 400 through the endpoint, and the dialer's Control
 // hook refuses the connection at dial time (defense in depth against DNS
-// rebinding — same function, second layer).
+// rebinding — same shared function, second layer).
 func TestWebhook_SSRFRejected(t *testing.T) {
 	e := newTenv(t)
 	const path = "/console/api/v1/settings/webhook/test"
-	for _, url := range []string{"http://127.0.0.1:9/x", "http://169.254.169.254/latest", "http://10.0.0.5/hook", "http://[::1]/x"} {
+	for _, url := range []string{
+		"http://127.0.0.1:9/x",          // loopback
+		"http://169.254.169.254/latest", // cloud metadata
+		"http://10.0.0.5/hook",          // RFC1918
+		"http://[::1]/x",                // IPv6 loopback
+		"http://100.64.0.1/hook",        // CGNAT
+		"http://0.255.255.255/hook",     // 0.0.0.0/8
+	} {
 		if w := e.as("admin@x.io", "POST", path, map[string]any{"url": url}); w.Code != http.StatusBadRequest {
 			t.Fatalf("%s: %d %s", url, w.Code, w.Body)
 		} else if !strings.Contains(w.Body.String(), "public") {
 			t.Fatalf("%s: message should say public: %s", url, w.Body)
 		}
 	}
-	// The dialer Control itself: public passes, private fails.
-	if err := webhookTestControl("tcp", "8.8.8.8:443", nil); err != nil {
+	// The dialer Control itself (webhookDialControl → the shared guard):
+	// public passes, private/CGNAT/this-network fail.
+	if err := webhookDialControl("tcp", "8.8.8.8:443", nil); err != nil {
 		t.Fatalf("control public: %v", err)
 	}
-	if err := webhookTestControl("tcp", "127.0.0.1:443", nil); err == nil {
-		t.Fatal("control loopback: expected error")
-	}
-	if err := webhookTestControl("tcp", "169.254.169.254:80", nil); err == nil {
-		t.Fatal("control metadata: expected error")
+	for _, addr := range []string{"127.0.0.1:443", "169.254.169.254:80", "100.64.0.1:443", "0.255.255.255:80"} {
+		if err := webhookDialControl("tcp", addr, nil); err == nil {
+			t.Fatalf("control %s: expected error, got nil", addr)
+		}
 	}
 }
 
