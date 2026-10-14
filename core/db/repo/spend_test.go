@@ -179,24 +179,29 @@ func forceDue(t *testing.T, f fixture) {
 }
 
 // crossingWindowStart returns the fixture key's current window start, mirroring
-// WindowStart's rule: an active window starts one period before its reset
-// instant, an expired one (reset in the past) starts at the reset instant.
+// WindowStart's rule: a windowed type's active window starts one period before
+// its reset instant (derived in the SERVER's timezone), an expired one (reset
+// in the past) starts at the reset instant; total/unlimited use the fixed
+// epoch sentinel.
 func crossingWindowStart(t *testing.T, f fixture) time.Time {
 	t.Helper()
 	k, err := f.s.GetKey(context.Background(), f.k.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if k.BudgetResetAt == nil {
-		t.Fatal("budget_reset_at is nil")
+	st, err := f.s.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !time.Now().Before(*k.BudgetResetAt) {
-		return *k.BudgetResetAt // expired: the window began at the reset instant
+	loc, err := time.LoadLocation(st.Timezone)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if k.BudgetType == "monthly" {
-		return k.BudgetResetAt.AddDate(0, -1, 0)
+	ws := k.Limits.WindowStart(time.Now(), loc)
+	if ws == nil {
+		t.Fatal("window start is nil")
 	}
-	return k.BudgetResetAt.AddDate(0, 0, -1) // daily
+	return *ws
 }
 
 // forceWindowStart moves the fixture key's window to the one whose reset instant
@@ -387,16 +392,52 @@ func TestRecordSpend_CrossingFiresInExpiredWindowBeforeReset(t *testing.T) {
 	}
 }
 
-func TestRecordSpend_TotalBudgetNeverCrosses(t *testing.T) {
+// TestRecordSpend_TotalBudgetCrossesOnce guards the case the old
+// "total never crosses" test locked in (A4): a key with a total budget has a
+// fixed window identity (the epoch sentinel), so its 80%/100% crossings fire
+// exactly once over its lifetime — callers already get 429 budget_exceeded at
+// 100%, and the webhook must not be the only thing that stays silent.
+func TestRecordSpend_TotalBudgetCrossesOnce(t *testing.T) {
 	f := newFixture(t, "total")
 	ctx := context.Background()
 	now := time.Now()
-	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(5_000_000_000, now)})
+	// 0 -> 900M: crosses 80% once (budget_nanos = 1e9).
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) {
+		t.Fatalf("total budget: got %+v, want the 80 key crossing", cx)
+	}
+	// 900M -> 1050M: crosses 100% once.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(150_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 100) {
+		t.Fatalf("total budget: got %+v, want the 100 key crossing", cx)
+	}
+	// The sentinel window never re-arms: further overage fires nothing.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(10_000_000, now)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cx) != 0 {
-		t.Fatalf("total budget: got %+v, want zero crossings", cx)
+		t.Fatalf("total budget: got %+v, want zero crossings (one-shot per lifetime)", cx)
+	}
+	// The total counter is the plain sum — no window expiry can apply.
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 1_060_000_000 {
+		t.Fatalf("spend_nanos=%d, want 1.06B", k.SpendNanos)
+	}
+	// Unlimited budgets still have no threshold: no crossings ever.
+	f2 := newFixture(t, "unlimited")
+	cx, err = f2.s.RecordSpend(ctx, []repo.SpendRecord{f2.rec(5_000_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("unlimited budget: got %+v, want zero crossings", cx)
 	}
 }
 
@@ -408,5 +449,329 @@ func TestDeleteSpendBefore(t *testing.T) {
 	n, err := f.s.DeleteSpendBefore(ctx, time.Now().AddDate(0, 0, -90))
 	if err != nil || n != 1 {
 		t.Fatalf("deleted %d, %v", n, err)
+	}
+}
+
+// forceWindowAt sets the fixture key's window to the one whose reset instant
+// is `at` (freshly started: counter zero, marker cleared) without running the
+// reset worker.
+func forceWindowAt(t *testing.T, f fixture, at time.Time) {
+	t.Helper()
+	if err := f.s.ExecForTest(context.Background(),
+		`UPDATE api_keys SET spend_nanos = 0, budget_reset_at = $1, budget_notified_window = NULL, budget_notified_pct = 0 WHERE id = $2`,
+		at, f.k.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRecordSpend_ExpiredWindowSpendChargedToNewWindow is the A3 scenario:
+// the window's budget_reset_at has passed but the reset worker has not run
+// yet. The spend logged in that gap must charge the NEW window — not vanish
+// when the worker later zeroes the counter, and not pile onto the stale old
+// counter — and its thresholds must still cross in the gap.
+func TestRecordSpend_ExpiredWindowSpendChargedToNewWindow(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+
+	// Fill the current window to the cap.
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_000_000_000, now)}); err != nil {
+		t.Fatal(err)
+	}
+	// Expire the window without running the reset worker: the stored counter
+	// is the stale 1B from the old window.
+	forceDue(t, f)
+
+	// A $900M spend in the gap (window due, worker not run). It must start
+	// the fresh window from zero — the pre-fix code charged it ON TOP of the
+	// stale counter, and ResetBudgets then erased it.
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 900_000_000 {
+		t.Fatalf("spend_nanos=%d, want 900M (new window only, not stale 1B + 900M)", k.SpendNanos)
+	}
+	// The inline roll rescheduled the window: it must be in the future again,
+	// and the old window's identity is gone from the row.
+	if k.BudgetResetAt == nil || !k.BudgetResetAt.After(now) {
+		t.Fatalf("budget_reset_at=%v, want a fresh window in the future", k.BudgetResetAt)
+	}
+	// Crossing detection saw the POST-roll counter: the first write into the
+	// fresh window crossed 80% (and not 100%).
+	if !have(cx, "key", 80) || have(cx, "key", 100) {
+		t.Fatalf("gap crossings: got %+v, want the 80 key crossing only", cx)
+	}
+	if len(cx) > 0 && cx[0].SpendNanos != 900_000_000 {
+		t.Fatalf("SpendNanos=%d, want 900M (post-roll, not the stale 1B)", cx[0].SpendNanos)
+	}
+
+	// The reset worker then runs: it must be a no-op for this scope (the row
+	// is already fresh), and the gap spend must survive it.
+	if n, err := f.s.ResetBudgets(ctx); err != nil || n != 0 {
+		t.Fatalf("reset after inline roll: %d %v, want 0 rows (no-op)", n, err)
+	}
+	k, _ = f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 900_000_000 {
+		t.Fatalf("after reset: spend_nanos=%d, want 900M (not erased)", k.SpendNanos)
+	}
+	// More spend in the same fresh window accumulates normally.
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(250_000_000, now)}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ = f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 1_150_000_000 {
+		t.Fatalf("spend_nanos=%d, want 1.15B (accumulation in the rolled window)", k.SpendNanos)
+	}
+}
+
+// TestRecordSpend_TwoWindowsWithoutReset guards the reviewer's worst case:
+// the reset worker never runs. Two consecutive windows must each carry
+// exactly their own spend, with correct crossings in each, purely from the
+// inline roll.
+func TestRecordSpend_TwoWindowsWithoutReset(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+
+	// Window A: fill to the cap; both thresholds fire once.
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) || !have(cx, "key", 100) {
+		t.Fatalf("window A: got %+v, want 80 and 100", cx)
+	}
+	// Let window A expire (worker NEVER runs) and write into the fresh
+	// window B: it rolls from zero and fires both thresholds again.
+	forceDue(t, f)
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) || !have(cx, "key", 100) {
+		t.Fatalf("window B: got %+v, want 80 and 100 (no reset worker ran)", cx)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 1_050_000_000 {
+		t.Fatalf("window B: spend_nanos=%d, want 1.05B (A's 1.05B discarded by the roll)", k.SpendNanos)
+	}
+	// Window B again: the marker holds at pct 100, so nothing re-fires even
+	// though spend keeps growing.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("window B overage: got %+v, want zero crossings (one-shot per window)", cx)
+	}
+	k, _ = f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 2_100_000_000 {
+		t.Fatalf("window B: spend_nanos=%d, want 2.1B", k.SpendNanos)
+	}
+}
+
+// TestRecordSpend_WindowChargeInServerTimezone is the A2 end-to-end half:
+// RecordSpend must derive the in-window charging boundary in the SERVER's
+// timezone (loaded from settings), not UTC. A monthly window in Asia/Taipei
+// ending at the 1st-of-month local midnight has its start one month back in
+// WALL-CLOCK Taipei. Go's AddDate normalizes day overflow (it does not clamp),
+// so subtracting a month in the UTC frame drifts several days — that is the
+// A2 bug. The reset is a fixed FUTURE monthly reset (2027-04-01 00:00 Taipei
+// = 2027-03-31 16:00 UTC) so the window is active for the duration of the test
+// and the math is independent of the host's TZ.
+//
+//	Taipei window:  [2027-02-28 16:00 UTC, 2027-03-31 16:00 UTC)
+//	UTC-math window: [2027-03-03 16:00 UTC, 2027-03-31 16:00 UTC)  (bug)
+//
+// A record at 2027-03-01 00:00 UTC is inside the Taipei window but outside the
+// UTC-math window, so it is charged only by the correct (server-tz) logic.
+func TestRecordSpend_WindowChargeInServerTimezone(t *testing.T) {
+	f := newFixture(t, "monthly")
+	ctx := context.Background()
+	st, _ := f.s.GetSettings(ctx)
+	st.Timezone = "Asia/Taipei"
+	if _, err := f.s.UpdateSettings(ctx, *st); err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Date(2027, 3, 31, 16, 0, 0, 0, time.UTC) // 2027-04-01 00:00 Taipei, a monthly reset
+	forceWindowAt(t, f, reset)
+	inWindow := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)   // inside the Taipei window, outside UTC-math
+	outWindow := time.Date(2027, 2, 28, 0, 0, 0, 0, time.UTC) // before the Taipei window start
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, outWindow), f.rec(250, inWindow)}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 250 {
+		t.Fatalf("spend_nanos=%d, want 250 (only the in-window record, per the server timezone)", k.SpendNanos)
+	}
+	// Both records are still logged.
+	rows, err := f.s.QuerySpend(ctx, repo.SpendFilter{From: outWindow.Add(-time.Hour), To: reset.Add(time.Hour), GroupBy: "model"})
+	if err != nil || len(rows) != 1 || rows[0].Requests != 2 {
+		t.Fatalf("rows=%+v err=%v, want 2 logged records", rows, err)
+	}
+}
+
+// TestRecordSpend_MarkerWindowIdentityInServerTimezone verifies the one-shot
+// notify marker stores the window start derived in the SERVER's timezone (A2
+// on the marker path). Same fixed future monthly reset as above: the marker
+// must hold 2027-02-28 16:00 UTC (Taipei wall-clock month start), not the
+// UTC-math drift 2027-03-03 16:00 UTC.
+func TestRecordSpend_MarkerWindowIdentityInServerTimezone(t *testing.T) {
+	f := newFixture(t, "monthly")
+	ctx := context.Background()
+	st, _ := f.s.GetSettings(ctx)
+	st.Timezone = "Asia/Taipei"
+	if _, err := f.s.UpdateSettings(ctx, *st); err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Date(2027, 3, 31, 16, 0, 0, 0, time.UTC)
+	forceWindowAt(t, f, reset)
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) {
+		t.Fatalf("got %+v, want the 80 key crossing", cx)
+	}
+	got, err := f.s.QueryForTest(ctx, `SELECT budget_notified_window FROM api_keys WHERE id=$1`, f.k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker, ok := got.(time.Time)
+	if !ok {
+		t.Fatalf("budget_notified_window type = %T, want time.Time", got)
+	}
+	want := time.Date(2027, 2, 28, 16, 0, 0, 0, time.UTC) // Taipei wall-clock month start
+	if !marker.Equal(want) {
+		t.Fatalf("budget_notified_window=%v, want %v (server-timezone window start)", marker, want)
+	}
+}
+
+// TestUpdateKey_ReraimsNotifyMarker is A11: editing a budget mid-window
+// (raising the cap after the key already hit 100%) must re-arm the one-shot
+// marker so the NEW thresholds fire again.
+func TestUpdateKey_ReraimsNotifyMarker(t *testing.T) {
+	f := newFixture(t, "daily") // budget_nanos = 1e9
+	ctx := context.Background()
+	now := time.Now()
+	// Hit 100%: marker now holds the window start at pct 100.
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 100) {
+		t.Fatalf("setup: got %+v, want the 100 crossing", cx)
+	}
+	// Admin raises the cap to 2e9. The old pct-100 marker would suppress the
+	// new 80% (1.6e9) and 100% (2e9) crossings without the re-arm.
+	kin, err := f.s.GetKey(ctx, f.k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kin.BudgetNanos = 2_000_000_000
+	if _, err := f.s.UpdateKey(ctx, f.k.ID, repo.KeyInput{Alias: kin.Alias, GroupID: kin.GroupID, Models: kin.Models,
+		BudgetType: kin.BudgetType, BudgetNanos: kin.BudgetNanos, RPMLimit: kin.RPMLimit, TPMLimit: kin.TPMLimit, ExpiresAt: kin.ExpiresAt}); err != nil {
+		t.Fatal(err)
+	}
+	// 1.05B -> 2.1B crosses the new 80% and 100%: both must fire again.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) {
+		t.Fatalf("after cap raise: got %+v, want the new 80 crossing (1.6e9)", cx)
+	}
+	if !have(cx, "key", 100) {
+		t.Fatalf("after cap raise: got %+v, want the new 100 crossing (2e9)", cx)
+	}
+	// A no-op edit (same cap and type) must NOT clear a fresh marker: the
+	// key stays one-shot within its window.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(10_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kin, _ = f.s.GetKey(ctx, f.k.ID)
+	if _, err := f.s.UpdateKey(ctx, f.k.ID, repo.KeyInput{Alias: kin.Alias, GroupID: kin.GroupID, Models: kin.Models,
+		BudgetType: kin.BudgetType, BudgetNanos: kin.BudgetNanos, RPMLimit: kin.RPMLimit, TPMLimit: kin.TPMLimit, ExpiresAt: kin.ExpiresAt}); err != nil {
+		t.Fatal(err)
+	}
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(10_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("no-op edit: got %+v, want zero crossings (marker must not be cleared)", cx)
+	}
+}
+
+// TestUpdateGroup_ReraimsNotifyMarker is A11 on the group scope: raising a
+// group's cap mid-window after it hit 100% re-arms its marker.
+func TestUpdateGroup_ReraimsNotifyMarker(t *testing.T) {
+	f := newFixture(t, "unlimited")
+	ctx := context.Background()
+	now := time.Now()
+	// Give the fixture group a daily 1e9 budget.
+	gin, err := f.s.GetGroup(ctx, f.g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.UpdateGroup(ctx, f.g.ID, repo.GroupInput{Name: gin.Name, BudgetType: "daily", BudgetNanos: 1_000_000_000,
+		RPMLimit: gin.RPMLimit, TPMLimit: gin.TPMLimit, Models: &gin.Models}); err != nil {
+		t.Fatal(err)
+	}
+	// Fill the group window to 100%: the group marker holds pct 100.
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "group", 100) {
+		t.Fatalf("setup: got %+v, want the 100 group crossing", cx)
+	}
+	// Raise the cap to 2e9 — the re-arm must let the new thresholds fire.
+	if _, err := f.s.UpdateGroup(ctx, f.g.ID, repo.GroupInput{Name: gin.Name, BudgetType: "daily", BudgetNanos: 2_000_000_000,
+		RPMLimit: gin.RPMLimit, TPMLimit: gin.TPMLimit, Models: &gin.Models}); err != nil {
+		t.Fatal(err)
+	}
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "group", 80) || !have(cx, "group", 100) {
+		t.Fatalf("after cap raise: got %+v, want the group's new 80 and 100 crossings", cx)
+	}
+}
+
+// TestRecordSpend_TotalBudgetUnaffectedByRoll is A3's total-budget guard:
+// the inline roll must never touch a total budget — no window, no expiry,
+// plain accumulation forever.
+func TestRecordSpend_TotalBudgetUnaffectedByRoll(t *testing.T) {
+	f := newFixture(t, "total")
+	ctx := context.Background()
+	now := time.Now()
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(500, now)}); err != nil {
+		t.Fatal(err)
+	}
+	// total never rolls, so nothing can force it "due" — the row's
+	// budget_reset_at stays NULL. Verify accumulation over a stale-looking
+	// old record plus a fresh one.
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(300, now.AddDate(0, -1, 0))}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 800 {
+		t.Fatalf("spend_nanos=%d, want 800 (total: everything counts, no roll)", k.SpendNanos)
+	}
+	if k.BudgetResetAt != nil {
+		t.Fatalf("budget_reset_at=%v, want NULL for total", k.BudgetResetAt)
+	}
+	// The reset worker also leaves total budgets alone.
+	if n, _ := f.s.ResetBudgets(ctx); n != 0 {
+		t.Fatalf("reset %d rows; total budgets must never reset", n)
+	}
+	k, _ = f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 800 {
+		t.Fatalf("after reset: spend_nanos=%d, want 800", k.SpendNanos)
 	}
 }

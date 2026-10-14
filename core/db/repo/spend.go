@@ -51,14 +51,33 @@ type SpendRow struct {
 	CostNanos    int64  `json:"cost_nanos"`
 }
 
+// serverTimezone loads the server's timezone from settings, falling back to
+// UTC for unknown/invalid names (UpdateSettings validates, but the column can
+// hold a name whose zone file is missing on this host — e.g. in a
+// distroless image without tzdata — and an arithmetic panic in the spend
+// path is not acceptable).
+func serverTimezone(name string) *time.Location {
+	loc, err := time.LoadLocation(name)
+	if err != nil || name == "" {
+		return time.UTC
+	}
+	return loc
+}
+
 // RecordSpend writes a batch of spend logs and bumps the key/group spend
 // counters in one transaction, so logs and budgets never disagree. Every
 // record is logged, but a key/group's spend_nanos only accrues the cost of the
-// records that fall inside its current budget window (total/unlimited have no
-// window, so every record counts). The raw spend_nanos column is bookkeeping
-// only; enforcement reads EffectiveSpend, and the reset worker zeroes a
-// window's spend when it rolls over, so a record charged to a window that has
-// already expired is simply dropped on the next reset rather than double-counted.
+// records that fall inside its current budget window (total/unlimited use the
+// fixed epoch window, so every record counts).
+//
+// The counter UPDATE rolls the window inline when it is already due (the reset
+// worker may not have run yet): the old counter is discarded, the new cost
+// starts the fresh window, and budget_reset_at advances — spend in the gap
+// between the window ending and the reset running is neither lost nor piled
+// onto a stale counter (A3). Crossings are detected with effOld = 0 for a
+// rolled window, so a first write into a fresh window still fires 80%/100% in
+// the gap. ResetBudgets remains defense-in-depth and is a no-op after an
+// inline roll.
 func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCrossing, error) {
 	if len(recs) == 0 {
 		return nil, nil
@@ -92,9 +111,15 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 		return nil, err
 	}
 
+	st, err := s.GetSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	loc := serverTimezone(st.Timezone)
+
 	now := time.Now()
-	keyCost := inWindowCosts(recs, keyLims, func(r SpendRecord) string { return r.KeyID }, now)
-	groupCost := inWindowCosts(recs, groupLims, func(r SpendRecord) string { return r.GroupID }, now)
+	keyCost := inWindowCosts(recs, keyLims, func(r SpendRecord) string { return r.KeyID }, now, loc)
+	groupCost := inWindowCosts(recs, groupLims, func(r SpendRecord) string { return r.GroupID }, now, loc)
 
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"spend_logs"}, []string{
 		"key_id", "user_id", "group_id", "model_id", "model_name", "provider",
@@ -102,24 +127,24 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 		"latency_ms", "status", "http_status", "error_message", "created_at"}, pgx.CopyFromRows(rows)); err != nil {
 		return nil, fmt.Errorf("copy spend_logs: %w", err)
 	}
-	for id, c := range keyCost {
-		if _, err := tx.Exec(ctx, `UPDATE api_keys SET spend_nanos = spend_nanos + $2, last_used_at = now() WHERE id=$1`, id, c); err != nil {
-			return nil, err
-		}
-	}
-	for id, c := range groupCost {
-		if _, err := tx.Exec(ctx, `UPDATE groups SET spend_nanos = spend_nanos + $2 WHERE id=$1`, id, c); err != nil {
-			return nil, err
-		}
-	}
-
-	// Crossing detection runs after the counter UPDATEs, before commit, using
-	// the pre-batch limits and in-window costs already fetched above.
-	crossings, err := s.detectCrossings(ctx, tx, "api_keys", "key", keyLims, keyLabels, keyCost, now)
+	keyRolled, err := rollSpend(ctx, tx, "api_keys", keyLims, keyCost, now)
 	if err != nil {
 		return nil, err
 	}
-	gx, err := s.detectCrossings(ctx, tx, "groups", "group", groupLims, groupLabels, groupCost, now)
+	groupRolled, err := rollSpend(ctx, tx, "groups", groupLims, groupCost, now)
+	if err != nil {
+		return nil, err
+	}
+
+	// Crossing detection runs after the counter UPDATEs, before commit, using
+	// the in-window costs fetched above. For a window this batch just rolled
+	// inline, effOld is 0 (reset_at in the past) and the batch cost IS the
+	// fresh window's spend, so effNew is the post-roll counter value.
+	crossings, err := s.detectCrossings(ctx, tx, "api_keys", "key", keyLims, keyLabels, keyCost, now, loc, keyRolled)
+	if err != nil {
+		return nil, err
+	}
+	gx, err := s.detectCrossings(ctx, tx, "groups", "group", groupLims, groupLabels, groupCost, now, loc, groupRolled)
 	if err != nil {
 		return nil, err
 	}
@@ -131,24 +156,81 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	return crossings, nil
 }
 
+// rollSpend adds each scope's in-window cost to its spend counter, rolling
+// the window inline when it is due (A3): a windowed budget past its reset
+// instant starts a fresh window at zero and reschedules budget_reset_at, so
+// the gap before the reset worker runs neither erases this spend (the stale
+// counter is discarded) nor lets it pile onto the old window's counter.
+// Non-windowed budgets and budgets that are not yet due just accumulate.
+// Runs in the caller's transaction, so the spend_logs insert and the counter
+// update commit or roll back together. Returns, for every scope that was due
+// before this write, the fresh window's budget_reset_at (the window identity
+// crossing detection must use).
+func rollSpend(ctx context.Context, tx pgx.Tx, table string, lims map[string]Limits, costs map[string]int64, now time.Time) (map[string]time.Time, error) {
+	rolled := map[string]time.Time{}
+	lastUsed := ""
+	if table == "api_keys" {
+		lastUsed = "last_used_at = now(),"
+	}
+	for id, l := range lims {
+		var newReset *time.Time
+		err := tx.QueryRow(ctx,
+			`UPDATE `+table+` SET `+lastUsed+`
+			 spend_nanos = CASE WHEN budget_type IN ('daily','monthly') AND budget_reset_at <= now()
+				 THEN $2 ELSE spend_nanos + $2 END,
+			 budget_reset_at = CASE WHEN budget_type IN ('daily','monthly') AND budget_reset_at <= now()
+				 THEN next_budget_reset(budget_type) ELSE budget_reset_at END
+			 WHERE id = $1
+			 RETURNING budget_reset_at`, id, costs[id]).Scan(&newReset)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue // the row vanished between budgetWindows and here; nothing to charge
+			}
+			return nil, err
+		}
+		// Rolled iff the row was due before this write — the same condition
+		// the SQL CASE applies — and the RETURNING value is then the fresh
+		// window's reset instant. (RETURNING reflects post-update values, so
+		// the due-ness must be judged against the pre-batch limits.)
+		if l.isWindowed() && l.BudgetResetAt != nil && !now.Before(*l.BudgetResetAt) && newReset != nil {
+			rolled[id] = *newReset
+		}
+	}
+	return rolled, nil
+}
+
 // detectCrossings fires a one-shot BudgetCrossing for each scope whose
 // effective spend crosses the 80% or 100% threshold in its current window.
 // effOld is the pre-batch effective spend (0 for an expired-but-not-yet-reset
-// window); effNew is effOld plus this batch's in-window cost. Scopes with no
-// window (total/unlimited) or no cap are skipped. The marker UPDATE is atomic:
+// window — the inline roll discards the stale counter in this same
+// transaction, so the fresh window's spend starts at exactly this batch's
+// cost); effNew is effOld plus this batch's in-window cost. Scopes with no cap
+// and unlimited budgets are skipped; total budgets use the fixed epoch window
+// identity so their one-shot marker works (A4). The marker UPDATE is atomic:
 // a threshold fires only if the stored notify window differs from this
 // window's start OR the stored pct is below the threshold, so each threshold
 // fires once per window.
+//
+// The marker's window identity is the window the scope is IN right now: the
+// expired-window start (the fresh window began at the reset that just passed)
+// for a write that rolled the window inline, the active window's start
+// otherwise. This equals what a later write in the fresh window derives once
+// the stored counter has rolled, for the standard short gap the reset worker
+// is expected to cover.
 func (s *Store) detectCrossings(ctx context.Context, tx pgx.Tx, table, scope string,
-	lims map[string]Limits, labels map[string]string, costs map[string]int64, now time.Time) ([]BudgetCrossing, error) {
+	lims map[string]Limits, labels map[string]string, costs map[string]int64, now time.Time, loc *time.Location, rolled map[string]time.Time) ([]BudgetCrossing, error) {
 	var out []BudgetCrossing
 	for id, lim := range lims {
-		ws := lim.WindowStart(now)
-		if ws == nil || lim.BudgetNanos <= 0 {
-			continue // total/unlimited/no cap: never crosses
+		ws := lim.WindowStart(now, loc)
+		if ws == nil || lim.BudgetNanos <= 0 || lim.BudgetType == "unlimited" {
+			continue // no window identity, no cap, or no threshold: never crosses
 		}
 		effOld := lim.EffectiveSpend(now)
 		effNew := effOld + costs[id]
+		resetAt := lim.BudgetResetAt
+		if r, ok := rolled[id]; ok {
+			resetAt = &r // report the fresh window's reset instant, not the one that just passed
+		}
 		for _, t := range []int64{80, 100} {
 			thr := t * lim.BudgetNanos / 100
 			if thr <= 0 || effOld >= thr || effNew < thr {
@@ -166,9 +248,9 @@ func (s *Store) detectCrossings(ctx context.Context, tx pgx.Tx, table, scope str
 			tag, err := tx.Exec(ctx,
 				`UPDATE `+table+` SET budget_notified_window = $2, budget_notified_pct =
 					CASE WHEN budget_notified_window IS DISTINCT FROM $2 THEN $3
-						 ELSE GREATEST(budget_notified_pct, $3) END
+						ELSE GREATEST(budget_notified_pct, $3) END
 				 WHERE id = $1 AND (budget_notified_window IS DISTINCT FROM $2 OR budget_notified_pct < $3)`,
-				id, *ws, int16(t))
+				id, ws, int16(t))
 			if err != nil {
 				return nil, err
 			}
@@ -181,7 +263,7 @@ func (s *Store) detectCrossings(ctx context.Context, tx pgx.Tx, table, scope str
 					SpendNanos:    effNew,
 					BudgetNanos:   lim.BudgetNanos,
 					BudgetType:    lim.BudgetType,
-					BudgetResetAt: lim.BudgetResetAt,
+					BudgetResetAt: resetAt,
 				})
 			}
 		}
@@ -225,16 +307,17 @@ func budgetWindows(ctx context.Context, q pgx.Tx, table string, ids []string) (m
 // inWindowCosts returns each scope id's in-window cost. Every distinct id in
 // recs is present (value 0 if all its records are out of window), so callers
 // still touch last_used_at for a key/group that saw only stale records. A
-// record counts when its scope has no window (total/unlimited) or its
-// CreatedAt is at/after the window start.
-func inWindowCosts(recs []SpendRecord, lims map[string]Limits, scope func(SpendRecord) string, now time.Time) map[string]int64 {
+// record counts when its scope has no window (nil BudgetResetAt on a windowed
+// type) or its CreatedAt is at/after the window start — the epoch sentinel
+// for total/unlimited admits every record.
+func inWindowCosts(recs []SpendRecord, lims map[string]Limits, scope func(SpendRecord) string, now time.Time, loc *time.Location) map[string]int64 {
 	out := map[string]int64{}
 	for _, r := range recs {
 		id := scope(r)
 		if _, ok := out[id]; !ok {
 			out[id] = 0
 		}
-		ws := lims[id].WindowStart(now)
+		ws := lims[id].WindowStart(now, loc)
 		if ws == nil || !r.CreatedAt.Before(*ws) {
 			out[id] += r.CostNanos
 		}
@@ -257,6 +340,10 @@ func idsFromSet(m map[string]bool) []string {
 // IS DISTINCT FROM guard re-arms naturally for the new window. Clearing the marker
 // here would open a double-notify: a late reset that zeroes spend and clears the
 // marker would let the same window's threshold fire a second time (#24).
+//
+// After RecordSpend's inline roll (A3) the window is already advanced and its
+// counter fresh, so this is a no-op for those rows — defense-in-depth for
+// scopes that saw no writes since their window expired.
 func (s *Store) ResetBudgets(ctx context.Context) (int64, error) {
 	var total int64
 	for _, table := range []string{"api_keys", "groups"} {
