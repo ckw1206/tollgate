@@ -52,8 +52,12 @@ func LoadModels(ctx context.Context, store *repo.Store, v *vault.Vault) ([]*Mode
 			}
 			c := creds[id]
 			m.Secret, m.CredentialKind = secret, c.Kind
-			// Endpoint: model.api_base ▸ credential.api_base ▸ provider default (in the provider).
-			if m.APIBase == "" {
+			// Endpoint: credential.api_base ▸ provider default (in the provider); a model's own
+			// api_base counts only without a credential.
+			// ponytail: legacy rows only. A model saved before credentials had an endpoint can
+			// still carry its own api_base while its credential has none (migration 007 couldn't
+			// pick one); keep it rather than send the secret to a host nobody configured.
+			if c.APIBase != "" {
 				m.APIBase = c.APIBase
 			}
 			if m.Extra.VertexProject == "" {

@@ -32,7 +32,12 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, ms)
 }
 
-func validModel(w http.ResponseWriter, in repo.ModelInput) bool {
+// validModel also drops api_base from a model with a credential: the credential's endpoint
+// wins, and the console's Enable/Disable toggle re-sends whatever the model had stored.
+func validModel(w http.ResponseWriter, in *repo.ModelInput) bool {
+	if in.CredentialID != nil {
+		in.APIBase = ""
+	}
 	switch {
 	case in.Name == "" || in.UpstreamModel == "":
 		badRequest(w, "name and upstream_model are required")
@@ -42,6 +47,8 @@ func validModel(w http.ResponseWriter, in repo.ModelInput) bool {
 		badRequest(w, "prices must not be negative")
 	case in.Provider != "openai" && in.CredentialID == nil:
 		badRequest(w, in.Provider+" models need a credential")
+	case in.CredentialID == nil && in.APIBase == "":
+		badRequest(w, "api_base is required without a credential")
 	case llm.ValidateAPIBase(in.APIBase) != nil:
 		badRequest(w, llm.ValidateAPIBase(in.APIBase).Error())
 	case len(in.Extra) > 0 && json.Unmarshal(in.Extra, new(llm.Extra)) != nil:
@@ -81,7 +88,7 @@ func (s *Server) reload(r *http.Request) {
 
 func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 	var in repo.ModelInput
-	if !decode(w, r, &in) || !validModel(w, in) || !s.credentialFits(w, r, in) {
+	if !decode(w, r, &in) || !validModel(w, &in) || !s.credentialFits(w, r, in) {
 		return
 	}
 	m, err := s.Store.CreateModel(r.Context(), in)
@@ -97,7 +104,7 @@ func (s *Server) createModel(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in repo.ModelInput
-	if !decode(w, r, &in) || !validModel(w, in) || !s.credentialFits(w, r, in) {
+	if !decode(w, r, &in) || !validModel(w, &in) || !s.credentialFits(w, r, in) {
 		return
 	}
 	before, err := s.Store.GetModel(r.Context(), id)

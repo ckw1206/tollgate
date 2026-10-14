@@ -37,7 +37,7 @@ func TestCredentials_SecretNeverReturnedOrAudited(t *testing.T) {
 
 func TestModels_WriteReloadsRegistryAndValidates(t *testing.T) {
 	e := newTenv(t)
-	body := map[string]any{"name": "gpt", "provider": "openai", "upstream_model": "gpt-4o", "enabled": true,
+	body := map[string]any{"name": "gpt", "provider": "openai", "upstream_model": "gpt-4o", "api_base": "http://10.0.0.5:8000/v1", "enabled": true,
 		"price_input_micros": 2500000, "price_output_micros": 10000000}
 	w := e.as("admin@x.io", "POST", "/console/api/v1/models", body)
 	if w.Code != 201 || e.reloads != 1 {
@@ -60,7 +60,7 @@ func TestModels_DeleteWithSpendHistoryIs409(t *testing.T) {
 	e := newTenv(t)
 	ctx := context.Background()
 	m := decodeInto[repo.Model](t, e.as("admin@x.io", "POST", "/console/api/v1/models",
-		map[string]any{"name": "m", "provider": "openai", "upstream_model": "m", "enabled": true}))
+		map[string]any{"name": "m", "provider": "openai", "upstream_model": "m", "api_base": "http://10.0.0.5:8000/v1", "enabled": true}))
 	_, k, _ := e.store.CreateKey(ctx, e.admin.ID, repo.KeyInput{Alias: "k", GroupID: e.group.ID, BudgetType: "unlimited"})
 	e.store.RecordSpend(ctx, []repo.SpendRecord{{KeyID: k.ID, UserID: e.admin.ID, GroupID: e.group.ID, ModelID: m.ID, ModelName: "m",
 		Provider: "openai", Status: "success", HTTPStatus: 200, CreatedAt: time.Now()}})
@@ -145,7 +145,7 @@ func TestModels_NonWritersDontSeeUpstreamDetails(t *testing.T) {
 func TestModels_RejectsExtraTheRegistryCantLoad(t *testing.T) {
 	e := newTenv(t)
 	for _, extra := range []any{[]any{}, "x", map[string]any{"headers": map[string]any{"X": 1}}} {
-		body := map[string]any{"name": "m", "provider": "openai", "upstream_model": "m", "extra": extra}
+		body := map[string]any{"name": "m", "provider": "openai", "upstream_model": "m", "api_base": "http://10.0.0.5:8000/v1", "extra": extra}
 		if w := e.as("admin@x.io", "POST", "/console/api/v1/models", body); w.Code != 400 {
 			t.Fatalf("extra %v: %d", extra, w.Code)
 		}
