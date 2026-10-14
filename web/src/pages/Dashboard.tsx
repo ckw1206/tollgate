@@ -39,7 +39,8 @@ const storedShow = () => {
 }
 
 // Calendar days are YYYY-MM-DD in the server timezone, the same buckets as /spend?group_by=day.
-const isDay = (s: string | null): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s)
+// Years before 2000 are rejected (see DayInput).
+const isDay = (s: string | null): s is string => !!s && /^2\d{3}-\d{2}-\d{2}$/.test(s)
 const dayIn = (t: number, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(t)
 const nextDay = (d: string) => new Date(Date.parse(d) + DAY).toISOString().slice(0, 10)
 const fmtDay = (d: string) => new Date(Date.parse(d)).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -70,8 +71,10 @@ function spanOf(range: Range, pFrom: string | null, pTo: string | null, tz: stri
     label = 'Today'
     phrase = 'today'
   } else if (range === 'custom') {
-    let a = isDay(pFrom) ? pFrom : dayIn(now - 30 * DAY, tz)
-    let b = isDay(pTo) ? pTo : dayIn(now, tz)
+    const today = dayIn(now, tz)
+    const upToToday = (d: string) => (d < today ? d : today) // no spend in the future; bounds the day list
+    let a = upToToday(isDay(pFrom) ? pFrom : dayIn(now - 30 * DAY, tz))
+    let b = upToToday(isDay(pTo) ? pTo : today)
     if (a > b) [a, b] = [b, a]
     from = midnight(a, tz)
     to = midnight(nextDay(b), tz)
@@ -82,6 +85,28 @@ function spanOf(range: Range, pFrom: string | null, pTo: string | null, tz: stri
   for (let d = dayIn(from, tz), last = dayIn(to - 1, tz); d <= last; d = nextDay(d)) days.push(d)
   const q = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString() }).toString()
   return { q, days, label, phrase }
+}
+
+// DayInput: a custom-range date field. Typing a year passes through 0002, 0020 and 0202, so the
+// field keeps its own draft and only whole days from 2000 on reach the URL; blur drops a bad draft.
+function DayInput({ label, value, min, max, onCommit }: { label: string; value: string; min?: string; max?: string; onCommit: (d: string) => void }) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+  return (
+    <input
+      type="date"
+      aria-label={label}
+      className={controlCls + ' h-9 text-sm'}
+      value={draft}
+      min={min}
+      max={max}
+      onBlur={() => setDraft(value)}
+      onChange={(e) => {
+        setDraft(e.target.value)
+        if (isDay(e.target.value)) onCommit(e.target.value)
+      }}
+    />
+  )
 }
 
 function Stat({ label, value }: { label: string; value: string | null }) {
@@ -282,8 +307,8 @@ export default function Dashboard() {
       <PageHeader title={can('spend:read_all') ? 'Usage — everyone' : 'Your usage'}>
         {range === 'custom' && (
           <>
-            <input type="date" aria-label="From" className={controlCls + ' h-9 text-sm'} value={span.days[0]} max={span.days[span.days.length - 1]} onChange={(e) => isDay(e.target.value) && setRange({ from: e.target.value })} />
-            <input type="date" aria-label="To" className={controlCls + ' h-9 text-sm'} value={span.days[span.days.length - 1]} min={span.days[0]} onChange={(e) => isDay(e.target.value) && setRange({ to: e.target.value })} />
+            <DayInput label="From" value={span.days[0]!} max={span.days[span.days.length - 1]} onCommit={(d) => setRange({ from: d })} />
+            <DayInput label="To" value={span.days[span.days.length - 1]!} min={span.days[0]} onCommit={(d) => setRange({ to: d })} />
           </>
         )}
         <select aria-label="Range" className={controlCls + ' h-9 text-sm'} value={range} onChange={(e) => pickRange(e.target.value as Range)}>
