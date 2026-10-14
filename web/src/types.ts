@@ -146,6 +146,7 @@ export interface Settings {
   currency: string
   landing_headline: string // ≤ 80 characters; '' = default copy
   landing_tagline: string // ≤ 160 characters; '' = default copy
+  budget_webhook_url: string // '' = no budget alerts
 }
 
 // GET /auth/landing: public, cached for 60s.

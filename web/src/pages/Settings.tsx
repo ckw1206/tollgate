@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { api } from '../api'
+import { api, sendWebhookTest } from '../api'
 import { useAuth } from '../auth'
 import { ICON_TYPES, iconFromFile } from '../icon'
 import { BrandIcon } from '../Layout'
@@ -18,6 +18,9 @@ export default function Settings() {
   const [error, setError] = useState('')
   const [iconError, setIconError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [testBusy, setTestBusy] = useState(false)
+  const [testState, setTestState] = useState('') // '' | 'ok' | 'error'
+  const [testMsg, setTestMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
     if (current.data) setForm(current.data)
@@ -54,6 +57,24 @@ export default function Settings() {
     setForm((f) => f && { ...f, ...patch })
   }
   const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => update({ [k]: e.target.value })
+
+  const testWebhook = async () => {
+    setMsg('')
+    setError('')
+    setTestState('')
+    setTestMsg('')
+    setTestBusy(true)
+    try {
+      await sendWebhookTest()
+      setTestState('ok')
+      setTestMsg('Test event delivered.')
+    } catch (err) {
+      setTestState('error')
+      setTestMsg((err as Error).message)
+    } finally {
+      setTestBusy(false)
+    }
+  }
 
   const pickIcon = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
@@ -100,6 +121,20 @@ export default function Settings() {
           </select>
         </Field>
         <Field label="Currency label" hint="Display only; no conversion."><input className={inputCls} required disabled={ro} value={form.currency} onChange={set('currency')} /></Field>
+        <div className="text-sm">
+          <span className="font-medium">Budget webhook URL</span>
+          <input className={inputCls} type="url" disabled={ro} placeholder="https://hooks.example.com/…" value={form.budget_webhook_url} onChange={set('budget_webhook_url')} />
+          <span className="mt-1 block text-xs text-muted-foreground">Budget alerts are posted here as JSON. Blank = no alerts.</span>
+          {!ro && (
+            <span className="mt-2 flex items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" disabled={testBusy || form.budget_webhook_url === ''} onClick={testWebhook}>
+                {testBusy ? 'Sending…' : 'Send test event'}
+              </Button>
+              {testState === 'ok' && <span className="text-sm text-success-foreground">{testMsg}</span>}
+              {testState === 'error' && <ErrorText>{testMsg}</ErrorText>}
+            </span>
+          )}
+        </div>
         <section aria-label="Landing page" className="space-y-3 border-t border-border pt-4">
           <div className="flex items-baseline justify-between">
             <h2 className="text-sm font-semibold">Landing page</h2>

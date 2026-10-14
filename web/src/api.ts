@@ -33,6 +33,9 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   return data as T
 }
 
+// Fire a test event to the configured budget webhook. 200 = delivered; 5xx = failed.
+export const sendWebhookTest = () => api<void>('/console/api/v1/settings/webhook/test', { method: 'POST' })
+
 // Money: spend/budgets are nano-USD, prices are micro-USD per 1M tokens.
 export const usd = (nanos: number) => {
   const d = nanos / 1e9
