@@ -58,17 +58,17 @@ func (s *Server) spend(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, map[string]any{"rows": rows})
 }
 
-// spendRequests: the newest requests in the range, limit 10 by default, at most 100.
+// spendRequests: the newest requests in the range; limit is 10 when absent, else clamped to [1,100].
 func (s *Server) spendRequests(w http.ResponseWriter, r *http.Request) {
 	f, ok := spendFilter(w, r)
 	if !ok {
 		return
 	}
 	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
-	if err != nil || limit <= 0 {
+	if err != nil {
 		limit = 10
 	}
-	logs, err := s.Store.RecentSpend(r.Context(), f, min(limit, 100))
+	logs, err := s.Store.RecentSpend(r.Context(), f, min(max(limit, 1), 100))
 	if err != nil {
 		storeErr(w, err)
 		return

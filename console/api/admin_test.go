@@ -148,8 +148,10 @@ func TestSpendRequests_ScopedNewestFirstAndCapped(t *testing.T) {
 	if len(def) != 10 || def[0].OwnerEmail != "viewer@x.io" || def[1].OwnerEmail != "member@x.io" || !def[1].CreatedAt.After(def[2].CreatedAt) {
 		t.Fatalf("admin default: %d rows, first %+v", len(def), def[0])
 	}
-	if got := decodeInto[[]repo.SpendLog](t, e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?limit=500", nil)); len(got) != 100 {
-		t.Fatalf("limit=500 returned %d rows", len(got))
+	for q, want := range map[string]int{"500": 100, "0": 1, "-3": 1} {
+		if got := decodeInto[[]repo.SpendLog](t, e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?limit="+q, nil)); len(got) != want {
+			t.Fatalf("limit=%s returned %d rows, want %d", q, len(got), want)
+		}
 	}
 	if w := e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?from=yesterday", nil); w.Code != 400 {
 		t.Fatalf("bad from: %d", w.Code)
@@ -185,6 +187,13 @@ func TestSettingsAndAudit_AdminOnly(t *testing.T) {
 	}
 	if w := e.as("admin@x.io", "GET", "/console/api/v1/audit?limit=500&offset=-1", nil); w.Code != 200 {
 		t.Fatalf("out-of-range paging: %d %s", w.Code, w.Body)
+	}
+	e.store.InsertAudit(context.Background(), repo.AuditEntry{ActorEmail: "admin@x.io", Action: "key.create", Resource: "key"})
+	if z := decodeInto[struct {
+		Entries []repo.AuditEntry
+		Total   int
+	}](t, e.as("admin@x.io", "GET", "/console/api/v1/audit?limit=0", nil)); len(z.Entries) != 1 || z.Total < 2 {
+		t.Fatalf("limit=0: %d entries of %d", len(z.Entries), z.Total)
 	}
 	if w := e.as("member@x.io", "GET", "/console/api/v1/audit", nil); w.Code != 403 {
 		t.Fatalf("member audit: %d", w.Code)
