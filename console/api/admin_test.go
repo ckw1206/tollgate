@@ -96,7 +96,7 @@ func TestSpend_MemberSeesOnlyOwn(t *testing.T) {
 	if len(md.Rows) != 1 || md.Rows[0].Bucket != "m" || md.Rows[0].Day != time.Now().UTC().Format("2006-01-02") || md.Rows[0].CostNanos != 100 {
 		t.Fatalf("model,day: %+v", md)
 	}
-	if w := e.as("member@x.io", "GET", "/console/api/v1/spend?group_by=week", nil); w.Code != 400 {
+	if w := e.as("member@x.io", "GET", "/console/api/v1/spend?group_by=hourly", nil); w.Code != 400 {
 		t.Fatalf("bad group_by: %d", w.Code)
 	}
 }
