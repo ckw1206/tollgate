@@ -55,6 +55,54 @@ func TestRecordSpend_IncrementsCountersAndLogs(t *testing.T) {
 	}
 }
 
+func TestRecordSpend_OldWindowRecordIsLoggedNotCharged(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+	old := now.AddDate(0, 0, -1)
+	// One record in the previous window, one in the current window.
+	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, old), f.rec(250, now)}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	// Only the current-window record (250) is charged to spend_nanos.
+	if k.SpendNanos != 250 {
+		t.Fatalf("spend_nanos=%d, want 250 (only in-window charged)", k.SpendNanos)
+	}
+	// Both records are still logged.
+	rows, err := f.s.QuerySpend(ctx, repo.SpendFilter{From: now.Add(-48 * time.Hour), To: now.Add(time.Hour), GroupBy: "model"})
+	if err != nil || len(rows) != 1 || rows[0].Requests != 2 {
+		t.Fatalf("rows=%+v err=%v, want 2 logged records", rows, err)
+	}
+}
+
+func TestRecordSpend_InWindowRecordCharged(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(350, now)}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 350 {
+		t.Fatalf("spend_nanos=%d, want 350", k.SpendNanos)
+	}
+}
+
+func TestRecordSpend_TotalBudgetUnaffected(t *testing.T) {
+	f := newFixture(t, "total")
+	ctx := context.Background()
+	// total has no window, so even an old record is charged.
+	old := time.Now().AddDate(0, 0, -1)
+	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(400, old)}); err != nil {
+		t.Fatal(err)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 400 {
+		t.Fatalf("spend_nanos=%d, want 400 (total budget charges all)", k.SpendNanos)
+	}
+}
+
 func TestQuerySpend_ModelDayInServerTimezone(t *testing.T) {
 	f := newFixture(t, "unlimited")
 	ctx := context.Background()

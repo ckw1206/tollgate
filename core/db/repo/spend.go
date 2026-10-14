@@ -52,7 +52,13 @@ type SpendRow struct {
 }
 
 // RecordSpend writes a batch of spend logs and bumps the key/group spend
-// counters in one transaction, so logs and budgets never disagree.
+// counters in one transaction, so logs and budgets never disagree. Every
+// record is logged, but a key/group's spend_nanos only accrues the cost of the
+// records that fall inside its current budget window (total/unlimited have no
+// window, so every record counts). The raw spend_nanos column is bookkeeping
+// only; enforcement reads EffectiveSpend, and the reset worker zeroes a
+// window's spend when it rolls over, so a record charged to a window that has
+// already expired is simply dropped on the next reset rather than double-counted.
 func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 	if len(recs) == 0 {
 		return nil
@@ -64,7 +70,7 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 	defer tx.Rollback(ctx)
 
 	rows := make([][]any, len(recs))
-	keyCost, groupCost := map[string]int64{}, map[string]int64{}
+	keySet, groupSet := map[string]bool{}, map[string]bool{}
 	for i, r := range recs {
 		var errMsg any
 		if r.ErrorMessage != "" {
@@ -73,9 +79,23 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 		rows[i] = []any{r.KeyID, r.UserID, r.GroupID, r.ModelID, r.ModelName, r.Provider,
 			r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheWriteTokens, r.CostNanos,
 			r.LatencyMS, r.Status, r.HTTPStatus, errMsg, r.CreatedAt}
-		keyCost[r.KeyID] += r.CostNanos
-		groupCost[r.GroupID] += r.CostNanos
+		keySet[r.KeyID] = true
+		groupSet[r.GroupID] = true
 	}
+
+	keyLims, err := budgetWindows(ctx, tx, "api_keys", idsFromSet(keySet))
+	if err != nil {
+		return err
+	}
+	groupLims, err := budgetWindows(ctx, tx, "groups", idsFromSet(groupSet))
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	keyCost := inWindowCosts(recs, keyLims, func(r SpendRecord) string { return r.KeyID }, now)
+	groupCost := inWindowCosts(recs, groupLims, func(r SpendRecord) string { return r.GroupID }, now)
+
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"spend_logs"}, []string{
 		"key_id", "user_id", "group_id", "model_id", "model_name", "provider",
 		"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_nanos",
@@ -93,6 +113,60 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// budgetWindows fetches the window fields for the given ids from table
+// (api_keys or groups). One query per scope type; these tables are small.
+func budgetWindows(ctx context.Context, q pgx.Tx, table string, ids []string) (map[string]Limits, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := q.Query(ctx,
+		`SELECT id, budget_type, budget_nanos, spend_nanos, budget_reset_at FROM `+table+
+			` WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]Limits, len(ids))
+	for rows.Next() {
+		var id string
+		var l Limits
+		if err := rows.Scan(&id, &l.BudgetType, &l.BudgetNanos, &l.SpendNanos, &l.BudgetResetAt); err != nil {
+			return nil, err
+		}
+		out[id] = l
+	}
+	return out, rows.Err()
+}
+
+// inWindowCosts returns each scope id's in-window cost. Every distinct id in
+// recs is present (value 0 if all its records are out of window), so callers
+// still touch last_used_at for a key/group that saw only stale records. A
+// record counts when its scope has no window (total/unlimited) or its
+// CreatedAt is at/after the window start.
+func inWindowCosts(recs []SpendRecord, lims map[string]Limits, scope func(SpendRecord) string, now time.Time) map[string]int64 {
+	out := map[string]int64{}
+	for _, r := range recs {
+		id := scope(r)
+		if _, ok := out[id]; !ok {
+			out[id] = 0
+		}
+		ws := lims[id].WindowStart(now)
+		if ws == nil || !r.CreatedAt.Before(*ws) {
+			out[id] += r.CostNanos
+		}
+	}
+	return out
+}
+
+// idsFromSet converts an id set to a slice for a query argument.
+func idsFromSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for id := range m {
+		out = append(out, id)
+	}
+	return out
 }
 
 // ResetBudgets zeroes every daily/monthly window that's due and schedules the next one.
