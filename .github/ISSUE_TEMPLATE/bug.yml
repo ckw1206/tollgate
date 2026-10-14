@@ -1,0 +1,63 @@
+name: Bug
+description: Something behaves wrongly today.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: One issue, one problem. Read [docs/issues.md](https://github.com/ckw1206/tollgate/blob/main/docs/issues.md) first.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences on what's wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behavior
+      description: What happens, with `file:line` references and a concrete example or repro.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: backend
+    attributes:
+      label: Scope — Backend
+      description: What changes in Go (`core/`, `console/api`, migrations). Write "No change" if none.
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Scope — Console
+      description: What changes in `web/`. Write "No change" and why if none.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Checkboxes, each one a test or check that proves the fix.
+      value: |
+        - [ ] Test:
+    validations:
+      required: true
+  - type: textarea
+    id: out_of_scope
+    attributes:
+      label: Out of scope
+      description: Related problems that belong in their own issue (link them).
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Suggested priority
+      description: Triage sets the final `priority:` label. See docs/issues.md.
+      options: [P1, P2, P3]
+    validations:
+      required: true
