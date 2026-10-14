@@ -12,9 +12,9 @@ interface AuthCtx {
 
 const Ctx = createContext<AuthCtx | null>(null)
 
-// isLandingPreview: /login?preview=1 (Settings → Preview) shows what signed-out visitors
+// isLandingPreview: /welcome?preview=1 (Settings → Preview) shows what signed-out visitors
 // see and loads only the public landing info, so the session isn't fetched there.
-export const isLandingPreview = () => window.location.pathname === '/login' && new URLSearchParams(window.location.search).has('preview')
+export const isLandingPreview = () => window.location.pathname === '/welcome' && new URLSearchParams(window.location.search).has('preview')
 
 // Permissions come only from GET /auth/me; never branch on user.role.
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -23,9 +23,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isLandingPreview()) refresh()
   }, [refresh])
+  // Sign out, then load /login afresh: dropping `me` in place would let RequireAuth send "/" to
+  // /welcome first, and a full load leaves nothing from the session in memory.
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => undefined)
-    setMe(null)
+    window.location.assign('/login')
   }
   if (me === undefined) return null
   const can = (perm: string) => !!me?.permissions.includes(perm)
@@ -41,6 +43,8 @@ export function useAuth() {
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { me } = useAuth()
   const loc = useLocation()
+  // Signed out: the console root shows the landing page; any other route asks to sign in.
+  if (!me && loc.pathname === '/') return <Navigate to="/welcome" replace />
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />
   return <>{children}</>
 }

@@ -42,6 +42,18 @@ While the users table is empty, `serve` generates a one-time setup token at star
 
 Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
 
+### Upgrading from v0.1.0: endpoint precedence changed
+
+v0.1.0 sent a model to its own API base when it had one, and fell back to its credential's. Now a model with a credential always uses the credential's API base (then the provider default); a model's own API base counts only when it has no credential. Migration 007 copies a model-level endpoint onto its API-key credential only when that credential has none and all of its models agree on one, and clears model copies equal to the credential's endpoint. Any other model-level endpoint stays stored but is ignored, so that model's prompts and the credential's secret go to the credential's endpoint from the first start of the new binary. Before upgrading, list those models:
+
+```sql
+SELECT m.name, m.api_base, c.name AS credential, c.api_base AS credential_api_base
+FROM models m JOIN provider_credentials c ON c.id = m.credential_id
+WHERE m.api_base <> '' AND c.api_base <> '' AND m.api_base <> c.api_base;
+```
+
+Move each row's model to its own credential with that endpoint (Models → Credentials, then edit the model) before you start the new binary.
+
 ## Background jobs
 
 Both run in-process, starting when the server starts.

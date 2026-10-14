@@ -103,11 +103,11 @@ export default function Settings() {
         <section aria-label="Landing page" className="space-y-3 border-t border-border pt-4">
           <div className="flex items-baseline justify-between">
             <h2 className="text-sm font-semibold">Landing page</h2>
-            <a href="/login?preview=1" target="_blank" rel="noopener" className="text-[13px] text-link-foreground underline underline-offset-2 hover:text-foreground">
+            <a href="/welcome?preview=1" target="_blank" rel="noopener" className="text-[13px] text-link-foreground underline underline-offset-2 hover:text-foreground">
               Preview ↗
             </a>
           </div>
-          <Field label="Headline" hint="Shown on the sign-in and setup page. Max 80 characters · blank = default.">
+          <Field label="Headline" hint="Shown on the landing page. Max 80 characters · blank = default.">
             <input className={inputCls} maxLength={80} disabled={ro} placeholder={DEFAULT_HEADLINE} value={form.landing_headline} onChange={set('landing_headline')} />
           </Field>
           <Field label="Tagline" hint="Max 160 characters · plain text, no links.">

@@ -18,22 +18,24 @@ type User struct {
 	Role         string    `json:"role"`
 	GroupID      string    `json:"group_id"`
 	Disabled     bool      `json:"disabled"`
+	ExtraModels  []string  `json:"extra_models"` // granted on top of the group's; empty = none
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type UserUpdate struct {
-	Name     *string `json:"name"`
-	Role     *string `json:"role"`
-	GroupID  *string `json:"group_id"`
-	Disabled *bool   `json:"disabled"`
+	Name        *string   `json:"name"`
+	Role        *string   `json:"role"`
+	GroupID     *string   `json:"group_id"`
+	Disabled    *bool     `json:"disabled"`
+	ExtraModels *[]string `json:"extra_models"`
 }
 
-const userCols = `id, email, name, password_hash, role, group_id, disabled, created_at, updated_at`
+const userCols = `id, email, name, password_hash, role, group_id, disabled, extra_models, created_at, updated_at`
 
 func scanUser(r scanner) (*User, error) {
 	var u User
-	err := r.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.GroupID, &u.Disabled, &u.CreatedAt, &u.UpdatedAt)
+	err := r.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.Role, &u.GroupID, &u.Disabled, &u.ExtraModels, &u.CreatedAt, &u.UpdatedAt)
 	return &u, notFound(err)
 }
 
@@ -138,6 +140,7 @@ func (s *Store) UpdateUser(ctx context.Context, id string, in UserUpdate) (*User
 			role     = COALESCE($3::user_role, role),
 			group_id = COALESCE($4::uuid, group_id),
 			disabled = COALESCE($5, disabled),
+			extra_models = COALESCE($6::text[], extra_models),
 			updated_at = now()
-		WHERE id=$1 RETURNING `+userCols, id, in.Name, in.Role, in.GroupID, in.Disabled))
+		WHERE id=$1 RETURNING `+userCols, id, in.Name, in.Role, in.GroupID, in.Disabled, in.ExtraModels))
 }

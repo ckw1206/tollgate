@@ -55,6 +55,41 @@ func TestRecordSpend_IncrementsCountersAndLogs(t *testing.T) {
 	}
 }
 
+func TestQuerySpend_ModelDayInServerTimezone(t *testing.T) {
+	f := newFixture(t, "unlimited")
+	ctx := context.Background()
+	st, _ := f.s.GetSettings(ctx)
+	st.Timezone = "Asia/Taipei" // UTC+8: 20:00Z is already the next day
+	f.s.UpdateSettings(ctx, *st)
+	m2, _ := f.s.CreateModel(ctx, repo.ModelInput{Name: "m2", Provider: "openai", UpstreamModel: "m2", Enabled: true, Extra: json.RawMessage(`{}`)})
+	d1 := time.Date(2026, 1, 1, 20, 0, 0, 0, time.UTC)
+	d2 := d1.AddDate(0, 0, 1)
+	other := func(cost int64, at time.Time) repo.SpendRecord {
+		r := f.rec(cost, at)
+		r.ModelID, r.ModelName = m2.ID, "m2"
+		return r
+	}
+	f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, d1), f.rec(50, d1), f.rec(200, d2), other(300, d1), other(400, d2)})
+	rows, err := f.s.QuerySpend(ctx, repo.SpendFilter{From: d1.Add(-time.Hour), To: d2.Add(time.Hour), GroupBy: "model,day"})
+	want := []repo.SpendRow{
+		{Bucket: "m1", Day: "2026-01-02", Requests: 2, InputTokens: 20, OutputTokens: 10, CostNanos: 150},
+		{Bucket: "m2", Day: "2026-01-02", Requests: 1, InputTokens: 10, OutputTokens: 5, CostNanos: 300},
+		{Bucket: "m1", Day: "2026-01-03", Requests: 1, InputTokens: 10, OutputTokens: 5, CostNanos: 200},
+		{Bucket: "m2", Day: "2026-01-03", Requests: 1, InputTokens: 10, OutputTokens: 5, CostNanos: 400},
+	}
+	if err != nil || len(rows) != len(want) {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Fatalf("row %d = %+v, want %+v", i, rows[i], want[i])
+		}
+	}
+	if _, err := f.s.QuerySpend(ctx, repo.SpendFilter{GroupBy: "week"}); err != repo.ErrGroupBy {
+		t.Fatalf("bad group_by: %v", err)
+	}
+}
+
 func TestResetBudgets_OnlyDueWindows(t *testing.T) {
 	f := newFixture(t, "daily")
 	ctx := context.Background()

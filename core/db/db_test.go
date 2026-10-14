@@ -128,3 +128,60 @@ func TestMigrate_005BackfillsCredentialProvider(t *testing.T) {
 		t.Fatalf("rows=%d", n)
 	}
 }
+
+// 007 moves an endpoint that lived on a credential's models onto the credential when they all
+// agree on one, and clears the models' now-redundant copies. Conflicts and Vertex are left alone.
+func TestMigrate_007MovesModelEndpointToCredential(t *testing.T) {
+	d := dbtest.New(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := d.Pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	cred := func(name, kind, provider, base string) (id string) {
+		t.Helper()
+		if err := d.Pool.QueryRow(ctx, `INSERT INTO provider_credentials (name, kind, provider, api_base, nonce, ciphertext)
+			VALUES ($1, $2, $3, $4, 'n', 'c') RETURNING id`, name, kind, provider, base).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	model := func(name, provider, credID, base string) {
+		exec(`INSERT INTO models (name, provider, upstream_model, credential_id, api_base) VALUES ($1, $2, 'u', $3, $4)`,
+			name, provider, credID, base)
+	}
+	agree := cred("agree", "api_key", "openai", "")
+	model("a1", "openai", agree, "http://10.0.0.5:8000/v1")
+	model("a2", "openai", agree, "http://10.0.0.5:8000/v1")
+	model("a3", "openai", agree, "")
+	conflict := cred("conflict", "api_key", "openai", "")
+	model("b1", "openai", conflict, "https://x.example.com/v1")
+	model("b2", "openai", conflict, "https://y.example.com/v1")
+	set := cred("set", "api_key", "openai", "https://proxy.example.com/v1")
+	model("c1", "openai", set, "https://other.example.com/v1")
+	model("c2", "openai", set, "https://proxy.example.com/v1")
+	vx := cred("vertex", "gcp_service_account", "google", "")
+	model("v1", "google", vx, "https://psc.example.com")
+
+	exec(`DELETE FROM schema_migrations WHERE version = 'migrations/007_credential_api_base_backfill.sql'`)
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"agree": "http://10.0.0.5:8000/v1", "conflict": "", "set": "https://proxy.example.com/v1", "vertex": ""} {
+		var got string
+		d.Pool.QueryRow(ctx, `SELECT api_base FROM provider_credentials WHERE name = $1`, name).Scan(&got)
+		if got != want {
+			t.Errorf("credential %s: %q, want %q", name, got, want)
+		}
+	}
+	for name, want := range map[string]string{"a1": "", "a2": "", "a3": "", "b1": "https://x.example.com/v1", "b2": "https://y.example.com/v1",
+		"c1": "https://other.example.com/v1", "c2": "", "v1": "https://psc.example.com"} {
+		var got string
+		d.Pool.QueryRow(ctx, `SELECT api_base FROM models WHERE name = $1`, name).Scan(&got)
+		if got != want {
+			t.Errorf("model %s: %q, want %q", name, got, want)
+		}
+	}
+}

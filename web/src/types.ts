@@ -17,14 +17,20 @@ export interface User {
   role: Role
   group_id: string
   disabled: boolean
+  extra_models: string[] // granted on top of the group's; empty = none
   created_at: string
 }
 
 export interface Group extends Limits {
   id: string
   name: string
+  models: string[] // empty = every enabled model
+  members: number
   created_at: string
 }
+
+// PUT /groups/{id} and PUT /users/{id}: live keys whose list now holds a model the owner can't use.
+export type Affected<T> = T & { affected_keys: number }
 
 export interface ApiKey extends Limits {
   id: string
@@ -53,6 +59,7 @@ export interface Model {
   price_cache_read_micros: number | null
   price_cache_write_micros: number | null
   extra: Record<string, unknown> | null
+  access?: 'group' | 'granted' // only without models:write ("group" wins when both)
   created_at: string
 }
 
@@ -104,6 +111,7 @@ export interface AuditEntry {
 
 export interface SpendRow {
   bucket: string
+  day?: string // YYYY-MM-DD, group_by=model,day only (bucket is then the model)
   requests: number
   input_tokens: number
   output_tokens: number
@@ -125,6 +133,9 @@ export interface SpendLog {
   http_status: number
   error_message: string
   created_at: string
+  key_alias: string
+  key_prefix: string
+  owner_email: string
 }
 
 export interface Settings {

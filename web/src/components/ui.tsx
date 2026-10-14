@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { Link, matchPath, useLocation } from 'react-router-dom'
 import { api } from '../api'
+import { useAuth } from '../auth'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
 // Colors, radii and fonts come from Alison UI tokens (see index.css).
@@ -7,9 +9,11 @@ import { api } from '../api'
 // controlCls carries only box, border, padding-x, color and focus styles. Size, margin and
 // width live in inputCls or at the call site: Tailwind v4 orders conflicting utilities by
 // value, not by position in the class string, so "inputCls + ' mt-0'" would not win.
-export const controlCls =
-  'rounded-md border border-input px-3 text-foreground outline-none ' +
-  'focus:border-ring focus:ring-[3px] focus:ring-ring/50 aria-[invalid=true]:border-destructive disabled:opacity-50'
+// controlBox is the same without padding-x, color and the disabled look, for controls that
+// need their own (an inline 28px select, the locked API base).
+export const controlBox =
+  'rounded-md border border-input outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/50 aria-[invalid=true]:border-destructive'
+export const controlCls = controlBox + ' px-3 text-foreground disabled:opacity-50'
 
 export const inputCls = controlCls + ' mt-1 block min-h-9 w-full py-1 text-sm'
 
@@ -44,7 +48,7 @@ export function Banner({ children, onDismiss }: { children: ReactNode; onDismiss
   )
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block text-sm">
       <span className="font-medium">{label}</span>
@@ -132,8 +136,9 @@ export function ConfirmDialog({ title, body, confirm, onConfirm, onClose, varian
 }
 
 export interface Col<T> {
-  head: string
+  head: ReactNode
   cell: (row: T) => ReactNode
+  center?: boolean
 }
 
 // rows === null means still loading: three skeleton rows.
@@ -172,7 +177,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
     })
   const last = cols.length - 1
   const span = cols.length + (expand ? 1 : 0)
-  const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''}`
+  const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''} ${cols[i].center ? 'text-center' : ''}`
   return (
     <div ref={wrapRef} className="overflow-x-auto rounded-md border border-border">
       <table className="min-w-full text-sm">
@@ -180,7 +185,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
           <tr className="h-10">
             {expand && <th className="w-10" aria-label="Expand" />}
             {cols.map((c, i) => (
-              <th key={i} className="whitespace-nowrap px-3 font-medium">{c.head}</th>
+              <th key={i} className={`whitespace-nowrap px-3 font-medium ${c.center ? 'text-center' : ''}`}>{c.head}</th>
             ))}
           </tr>
         </thead>
@@ -293,13 +298,48 @@ export function ErrorText({ children }: { children: ReactNode }) {
   return <p role="alert" className="text-sm text-destructive">{children}</p>
 }
 
-export function PageHeader({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+export interface Tab {
+  to: string
+  label: string
+  perm: string
+}
+
+// PageTabs: underline tabs under the page header, one route per tab. Tabs the role can't see
+// are dropped, and the bar is hidden when one is left.
+function PageTabs({ tabs }: { tabs: Tab[] }) {
+  const { can } = useAuth()
+  const { pathname } = useLocation()
+  const shown = tabs.filter((t) => can(t.perm))
+  if (shown.length < 2) return null
+  return (
+    <div role="tablist" className="-mt-2 mb-5 flex gap-1 overflow-x-auto border-b border-border">
+      {shown.map((t) => {
+        const on = !!matchPath(t.to, pathname)
+        return (
+          <Link
+            key={t.to}
+            to={t.to}
+            role="tab"
+            aria-selected={on}
+            className={`flex h-9 shrink-0 items-center whitespace-nowrap px-3 text-sm ${on ? 'font-medium text-foreground shadow-[inset_0_-2px_0_var(--primary)]' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t.label}
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
+
+// PageHeader: title and actions (the tab's CTA), then the tabs, then the description.
+export function PageHeader({ title, description, tabs, children }: { title: string; description?: string; tabs?: Tab[]; children?: ReactNode }) {
   return (
     <>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold leading-[1.2]">{title}</h1>
         {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       </div>
+      {tabs && <PageTabs tabs={tabs} />}
       {description && <p className="-mt-2 mb-4 text-sm text-muted-foreground">{description}</p>}
     </>
   )
@@ -363,17 +403,24 @@ export function Segmented<V extends string | number>({ options, value, onChange,
 export function useLoad<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState('')
-  const reload = useCallback(() => {
+  // reload resolves once the new data (or error) is in state. Only the latest request may set
+  // it: a slower response for a path (or reload) since superseded is dropped.
+  const seq = useRef(0)
+  const reload = useCallback(async () => {
+    const n = ++seq.current
     if (!path) return
-    api<T>(path).then(
+    await api<T>(path).then(
       (d) => {
+        if (n !== seq.current) return
         setData(d)
         setError('')
       },
-      (e: Error) => setError(e.message),
+      (e: Error) => {
+        if (n === seq.current) setError(e.message)
+      },
     )
   }, [path])
-  useEffect(reload, [reload])
+  useEffect(() => void reload(), [reload])
   return { data, error, reload }
 }
 
@@ -421,15 +468,19 @@ export interface MultiOption {
 }
 
 // MultiSelect: wrapping chips + a popover listbox with search, an "All" row and a
-// "N selected · Clear" footer. value [] means All. Keyboard: Enter/Space/↓ opens, ↑↓ move,
+// "N selected · Clear" footer. value [] means All; with noAll there is no All row and []
+// means none (allLabel then names the empty state). allHint follows allLabel on the trigger,
+// allSub on the list's All row. Keyboard: Enter/Space/↓ opens, ↑↓ move,
 // Space or Enter toggles, Esc closes, Backspace (empty search or on the trigger) drops the
 // last chip. staleIds are picks that are no longer options: shown as warning chips.
-export function MultiSelect({ options, value, onChange, allLabel, allHint, renderOption, staleIds = [], labelledBy }: {
+export function MultiSelect({ options, value, onChange, allLabel, allHint, allSub, noAll = false, renderOption, staleIds = [], labelledBy }: {
   options: MultiOption[]
   value: string[]
   onChange: (v: string[]) => void
   allLabel: string
   allHint?: string
+  allSub?: string
+  noAll?: boolean
   renderOption?: (o: MultiOption) => ReactNode
   staleIds?: string[]
   labelledBy?: string
@@ -443,7 +494,7 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
   const byId = new Map(options.map((o) => [o.id, o]))
   const q = query.trim().toLowerCase()
   const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options
-  const rows: (MultiOption | null)[] = q ? shown : [null, ...shown] // null = All
+  const rows: (MultiOption | null)[] = q || noAll ? shown : [null, ...shown] // null = All
 
   useEffect(() => {
     if (!open) return
@@ -563,7 +614,7 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
                       {o.meta && <span className="text-xs text-muted-foreground">{o.meta}</span>}
                     </>
                   ) : (
-                    <span className="flex-1">{allLabel}{allHint && <span className="text-xs text-muted-foreground"> · {allHint}</span>}</span>
+                    <span className="flex-1">{allLabel}{allSub && <span className="text-xs text-muted-foreground"> · {allSub}</span>}</span>
                   )}
                 </li>
               )
@@ -581,6 +632,38 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// CheckButton: a 20px square toggle for grids (aria-pressed). dim = ticked by something
+// else (e.g. "All models"), shown at 45% opacity.
+export function CheckButton({ on, dim = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { on: boolean; dim?: boolean }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      className={`inline-flex h-5 w-5 items-center justify-center border align-middle text-xs font-bold text-primary-foreground disabled:cursor-wait ${on ? 'border-primary bg-primary' : 'border-input bg-transparent'} ${dim ? 'opacity-45' : ''}`}
+      {...props}
+    >
+      {on && '✓'}
+    </button>
+  )
+}
+
+// Toast: a bottom-right notice with an optional action (e.g. Undo) that closes itself after
+// `ms`. Give it a new `key` per notice so the timer restarts.
+export function Toast({ children, action, onAction, onClose, ms = 5000 }: { children: ReactNode; action?: string; onAction?: () => void; onClose: () => void; ms?: number }) {
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const t = setTimeout(() => close.current(), ms)
+    return () => clearTimeout(t)
+  }, [ms])
+  return (
+    <div role="status" className="fixed bottom-4 right-4 z-50 flex max-w-[calc(100%-2rem)] items-center gap-4 rounded-md border border-border bg-background py-2 pl-4 pr-2 text-sm shadow-dialog">
+      <span>{children}</span>
+      {action && <Button size="sm" variant="ghost" onClick={onAction}>{action}</Button>}
     </div>
   )
 }

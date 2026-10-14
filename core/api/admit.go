@@ -21,8 +21,11 @@ func scopes(info *repo.AuthInfo) []scope {
 	return []scope{{"key", info.Key.ID, info.Key.Limits}, {"group", info.Group.ID, info.Group.Limits}}
 }
 
+// modelAllowed: the owner may use it (group or extra grant), and the key narrows from there.
+// Unknown or disabled models never get here; they are 404 model_not_found.
 func modelAllowed(info *repo.AuthInfo, model string) bool {
-	return len(info.Key.Models) == 0 || slices.Contains(info.Key.Models, model)
+	return repo.Access(info.GroupModels, info.ExtraModels, model) != "" &&
+		(len(info.Key.Models) == 0 || slices.Contains(info.Key.Models, model))
 }
 
 // admit enforces budgets, then RPM, then TPM, for both key and group.

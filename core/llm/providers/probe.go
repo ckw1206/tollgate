@@ -12,7 +12,7 @@ import (
 	"tollgate/core/llm"
 )
 
-// Provider default endpoints, used when neither the model nor its credential sets api_base.
+// Provider default endpoints, used when a model's credential (or a model without one) sets no api_base.
 // The console prefills the same values (web/src/components/CredentialDialog.tsx).
 const (
 	DefaultOpenAIBase    = "https://api.openai.com/v1"

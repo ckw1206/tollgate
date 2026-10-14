@@ -2,10 +2,19 @@ import { useState } from 'react'
 import { api, short, when } from '../api'
 import { useAuth } from '../auth'
 import InviteDialog from '../components/InviteDialog'
-import { Badge, Button, ConfirmDialog, controlCls, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad } from '../components/ui'
+import ModelAccessDialog from '../components/ModelAccessDialog'
+import { Badge, Button, ConfirmDialog, controlBox, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad } from '../components/ui'
+import { PEOPLE_TABS } from '../Layout'
 import type { Group, User } from '../types'
 
-const inlineSelect = controlCls + ' h-7 py-0 text-[13px]'
+const inlineSelect = controlBox + ' h-7 min-w-[104px] px-2 py-0 text-[13px] text-foreground disabled:opacity-50'
+
+// modelsText: "group (all)", "group + a, b" (extra grants) or "group (N)".
+function modelsText(u: User, g: Group | undefined) {
+  if (!g) return '—'
+  if (!g.models.length) return 'group (all)'
+  return u.extra_models.length ? `group + ${u.extra_models.join(', ')}` : `group (${g.models.length})`
+}
 
 export default function Users() {
   const { me, can } = useAuth()
@@ -16,6 +25,7 @@ export default function Users() {
   const [inviting, setInviting] = useState(false)
   const [url, setUrl] = useState('')
   const [disabling, setDisabling] = useState<User | null>(null)
+  const [access, setAccess] = useState<User | null>(null)
 
   const update = (u: User, patch: Partial<Pick<User, 'role' | 'group_id' | 'disabled'>>) =>
     api(`/console/api/v1/users/${u.id}`, { method: 'PUT', body: patch }).finally(users.reload)
@@ -23,14 +33,16 @@ export default function Users() {
     setError('')
     update(u, patch).catch((e: Error) => setError(e.message))
   }
+  const groupOf = (u: User) => groups.data?.find((g) => g.id === u.group_id)
   const groupName = (id: string) => groups.data?.find((g) => g.id === id)?.name ?? short(id)
   const editable = (u: User) => writable && u.id !== me?.user.id // never your own row
 
   return (
     <>
       <PageHeader
-        title="Users"
-        description="Tollgate is invite-only — there is no create-user API. Invite people from here or from Invites."
+        title="Users & groups"
+        tabs={PEOPLE_TABS}
+        description={'Tollgate is invite-only — there is no create-user API. "Invite user" creates a one-time invite link.'}
       >
         {can('invites:write') && <Button disabled={!groups.data} onClick={() => setInviting(true)}>Invite user</Button>}
       </PageHeader>
@@ -68,6 +80,7 @@ export default function Users() {
                 groupName(u.group_id)
               ),
           },
+          { head: 'Models', cell: (u) => modelsText(u, groupOf(u)) },
           { head: 'Joined', cell: (u) => when(u.created_at) },
           { head: 'Status', cell: (u) => (u.disabled ? <Badge tone="error">disabled</Badge> : <Badge tone="success">active</Badge>) },
           {
@@ -75,6 +88,7 @@ export default function Users() {
             cell: (u) =>
               editable(u) && (
                 <RowActions>
+                  <Button size="sm" variant="ghost" disabled={!groupOf(u)} onClick={() => setAccess(u)}>Model access</Button>
                   {u.disabled ? (
                     <Button size="sm" variant="ghost" onClick={() => inline(u, { disabled: false })}>Enable</Button>
                   ) : (
@@ -92,6 +106,17 @@ export default function Users() {
           onCreated={(u) => {
             setInviting(false)
             setUrl(u)
+          }}
+        />
+      )}
+      {access && groupOf(access) && (
+        <ModelAccessDialog
+          user={access}
+          group={groupOf(access)!}
+          onClose={() => setAccess(null)}
+          onSaved={() => {
+            setAccess(null)
+            users.reload()
           }}
         />
       )}

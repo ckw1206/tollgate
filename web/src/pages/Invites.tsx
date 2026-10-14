@@ -3,6 +3,7 @@ import { api, short, when } from '../api'
 import { useAuth } from '../auth'
 import InviteDialog from '../components/InviteDialog'
 import { Badge, Button, ConfirmDialog, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad, type Tone } from '../components/ui'
+import { PEOPLE_TABS } from '../Layout'
 import type { Group, Invite, User } from '../types'
 
 const tone: Record<Invite['status'], Tone> = { active: 'success', used: 'inactive', revoked: 'error', expired: 'warning' }
@@ -22,7 +23,7 @@ export default function Invites() {
 
   return (
     <>
-      <PageHeader title="Invites">{writable && <Button disabled={!groups.data} onClick={() => setCreating(true)}>Create invite</Button>}</PageHeader>
+      <PageHeader title="Users & groups" tabs={PEOPLE_TABS}>{writable && <Button disabled={!groups.data} onClick={() => setCreating(true)}>Create invite</Button>}</PageHeader>
       <div className="mb-4"><ErrorText>{invites.error}</ErrorText></div>
       <Table
         rows={rowsOf(invites)}
