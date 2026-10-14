@@ -29,3 +29,23 @@ func TestAudit_InsertListPaginate(t *testing.T) {
 		t.Fatalf("prefix filter matched %d, want 2", total)
 	}
 }
+
+func TestAudit_LimitCappedOffsetClamped(t *testing.T) {
+	s, g := newStore(t)
+	ctx := context.Background()
+	a := admin(t, s, g)
+	for range 201 {
+		if err := s.InsertAudit(ctx, repo.AuditEntry{ActorID: &a.ID, ActorEmail: a.Email, Action: "key.create", Resource: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if page, total, err := s.ListAudit(ctx, repo.AuditFilter{Limit: 500}); err != nil || total != 201 || len(page) != 200 {
+		t.Fatalf("limit 500: %d rows, total %d, err %v", len(page), total, err)
+	}
+	if page, _, err := s.ListAudit(ctx, repo.AuditFilter{}); err != nil || len(page) != 50 {
+		t.Fatalf("default limit: %d rows, err %v", len(page), err)
+	}
+	if page, _, err := s.ListAudit(ctx, repo.AuditFilter{Limit: 25, Offset: -1}); err != nil || len(page) != 25 {
+		t.Fatalf("offset -1: %d rows, err %v", len(page), err)
+	}
+}
