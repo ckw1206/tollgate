@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { api, ApiError, fromMicros, toMicros } from '../api'
+import { api, ApiError, fromMicros, num, toMicros } from '../api'
 import type { Credential, Model } from '../types'
 import { credEndpoint, credProvider, PROVIDERS } from './CredentialDialog'
 import { Button, controlBox, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
@@ -25,14 +25,13 @@ export const toForm = (m?: Model): Form => ({
 })
 
 const optMicros = (s: string) => (s.trim() === '' ? null : toMicros(s))
-const optInt = (s: string) => (s.trim() === '' ? null : parseInt(s, 10))
 
 export const payload = (f: Form) => ({
   name: f.name, provider: f.provider, upstream_model: f.upstream_model, api_base: f.credential_id ? '' : f.api_base,
   credential_id: f.credential_id || null, enabled: f.enabled,
   price_input_micros: toMicros(f.price_in), price_output_micros: toMicros(f.price_out),
   price_cache_read_micros: optMicros(f.price_cr), price_cache_write_micros: optMicros(f.price_cw),
-  context_window: optInt(f.context_window),
+  context_window: num(f.context_window),
   extra: JSON.parse(f.extra || '{}'),
 })
 
