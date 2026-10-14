@@ -59,15 +59,22 @@ export default function Settings() {
   const set = (k: keyof S) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => update({ [k]: e.target.value })
 
   const testWebhook = async () => {
+    if (!form) return
     setMsg('')
     setError('')
     setTestState('')
     setTestMsg('')
     setTestBusy(true)
     try {
-      await sendWebhookTest()
-      setTestState('ok')
-      setTestMsg('Test event delivered.')
+      // Test the value in the form (may not be saved yet); blank → the stored setting.
+      const r = await sendWebhookTest(form.budget_webhook_url || undefined)
+      if (r.ok) {
+        setTestState('ok')
+        setTestMsg(r.message || 'Test event delivered.')
+      } else {
+        setTestState('error')
+        setTestMsg(r.message) // redacted server-side
+      }
     } catch (err) {
       setTestState('error')
       setTestMsg((err as Error).message)
@@ -121,20 +128,18 @@ export default function Settings() {
           </select>
         </Field>
         <Field label="Currency label" hint="Display only; no conversion."><input className={inputCls} required disabled={ro} value={form.currency} onChange={set('currency')} /></Field>
-        <div className="text-sm">
-          <span className="font-medium">Budget webhook URL</span>
+        <Field label="Budget webhook URL" hint="Budget alerts are posted here as JSON. Blank = no alerts.">
           <input className={inputCls} type="url" disabled={ro} placeholder="https://hooks.example.com/…" value={form.budget_webhook_url} onChange={set('budget_webhook_url')} />
-          <span className="mt-1 block text-xs text-muted-foreground">Budget alerts are posted here as JSON. Blank = no alerts.</span>
-          {!ro && (
-            <span className="mt-2 flex items-center gap-2">
-              <Button type="button" variant="ghost" size="sm" disabled={testBusy || form.budget_webhook_url === ''} onClick={testWebhook}>
-                {testBusy ? 'Sending…' : 'Send test event'}
-              </Button>
-              {testState === 'ok' && <span className="text-sm text-success-foreground">{testMsg}</span>}
-              {testState === 'error' && <ErrorText>{testMsg}</ErrorText>}
-            </span>
-          )}
-        </div>
+        </Field>
+        {!ro && (
+          <div className="-mt-2 flex items-center gap-2">
+            <Button type="button" variant="ghost" size="sm" disabled={testBusy} onClick={testWebhook}>
+              {testBusy ? 'Sending…' : 'Send test event'}
+            </Button>
+            {testState === 'ok' && <span className="text-sm text-success-foreground">{testMsg}</span>}
+            {testState === 'error' && <ErrorText>{testMsg}</ErrorText>}
+          </div>
+        )}
         <section aria-label="Landing page" className="space-y-3 border-t border-border pt-4">
           <div className="flex items-baseline justify-between">
             <h2 className="text-sm font-semibold">Landing page</h2>
