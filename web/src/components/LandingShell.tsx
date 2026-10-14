@@ -32,10 +32,12 @@ function Status({ up }: { up: boolean | null }) {
   )
 }
 
-function HeaderLinks({ className, up }: { className: string; up: boolean | null }) {
+// In preview, Docs is a full page load too: in-app it would meet the unfetched session and ask a
+// signed-in admin to sign in.
+function HeaderLinks({ className, up, preview }: { className: string; up: boolean | null; preview: boolean }) {
   return (
     <nav className={`items-center gap-[clamp(16px,3vw,40px)] font-mono text-[13px] uppercase tracking-[0.08em] ${className}`}>
-      <Link to="/docs" className="hover:text-muted-foreground">Docs</Link>
+      {preview ? <a href="/docs" className="hover:text-muted-foreground">Docs</a> : <Link to="/docs" className="hover:text-muted-foreground">Docs</Link>}
       <a href={REPO} className="hover:text-muted-foreground">GitHub</a>
       <Status up={up} />
     </nav>
@@ -69,7 +71,7 @@ export function LandingShell({ info, cta, preview = false }: {
         </div>
       )}
       <header className="flex h-[88px] items-center justify-between gap-4 px-[clamp(20px,4vw,56px)] sm:grid sm:grid-cols-[1fr_auto_1fr]">
-        <HeaderLinks className="hidden sm:flex" up={up} />
+        <HeaderLinks className="hidden sm:flex" up={up} preview={preview} />
         <div className="flex min-w-0 items-center gap-2.5 sm:col-start-2">
           <BrandIcon icon={info?.server_icon ?? ''} size={32} />
           <span className="truncate text-[26px] font-medium tracking-[-0.02em]">{name}</span>
@@ -109,7 +111,7 @@ export function LandingShell({ info, cta, preview = false }: {
             </div>
           </>
         )}
-        <HeaderLinks className="mt-8 flex flex-wrap justify-center sm:hidden" up={up} />
+        <HeaderLinks className="mt-8 flex flex-wrap justify-center sm:hidden" up={up} preview={preview} />
       </main>
     </div>
   )
