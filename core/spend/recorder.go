@@ -20,7 +20,9 @@ type Recorder struct {
 	BatchSize  int
 
 	// OnCrossing is called for each budget crossing fired by a successful
-	// RecordSpend. Nil discards them. (Wired to a webhook in a later task.)
+	// RecordSpend, including the final flush at shutdown. It must not block
+	// (the caller is the flush loop); the webhook Sender's Submit is designed
+	// for that. Nil discards crossings.
 	OnCrossing func(repo.BudgetCrossing)
 
 	store *repo.Store
