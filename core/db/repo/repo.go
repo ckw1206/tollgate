@@ -42,9 +42,45 @@ type Limits struct {
 	TPMLimit      *int32     `json:"tpm_limit"`
 }
 
+// EffectiveSpend reports the spend that counts toward the cap as of now.
+// A daily/monthly window whose budget_reset_at is already in the past has not
+// been reset by the worker yet, so its spend must be treated as fresh (0) —
+// otherwise the request is blocked until midnight rolls over and the reset
+// runs (#21).
+func (l Limits) EffectiveSpend(now time.Time) int64 {
+	if l.isWindowed() && l.BudgetResetAt != nil && !now.Before(*l.BudgetResetAt) {
+		return 0
+	}
+	return l.SpendNanos
+}
+
+// WindowStart reports the start of the window a record should be charged to,
+// or nil for total/unlimited budgets and when there is no window (nil
+// BudgetResetAt). An expired daily/monthly window starts at the reset instant
+// itself; an active one starts one period before the reset.
+func (l Limits) WindowStart(now time.Time) *time.Time {
+	if !l.isWindowed() || l.BudgetResetAt == nil {
+		return nil
+	}
+	start := *l.BudgetResetAt
+	if !now.Before(start) {
+		return l.BudgetResetAt // expired: the new window began at the reset instant
+	}
+	if l.BudgetType == "monthly" {
+		start = start.AddDate(0, -1, 0)
+	} else {
+		start = start.AddDate(0, 0, -1)
+	}
+	return &start
+}
+
 // OverBudget reports whether the current window's spend has reached the cap.
-func (l Limits) OverBudget() bool {
-	return l.BudgetType != "unlimited" && l.SpendNanos >= l.BudgetNanos
+func (l Limits) OverBudget(now time.Time) bool {
+	return l.BudgetType != "unlimited" && l.EffectiveSpend(now) >= l.BudgetNanos
+}
+
+func (l Limits) isWindowed() bool {
+	return l.BudgetType == "daily" || l.BudgetType == "monthly"
 }
 
 func HashToken(raw string) string {

@@ -32,7 +32,7 @@ func modelAllowed(info *repo.AuthInfo, model string) bool {
 // Redis errors fail closed: an unenforceable limit must not become no limit.
 func (s *Server) admit(w http.ResponseWriter, r *http.Request, info *repo.AuthInfo) bool {
 	for _, sc := range scopes(info) {
-		if sc.limits.OverBudget() {
+		if sc.limits.OverBudget(s.Now()) {
 			WriteError(w, 429, "insufficient_quota", "budget_exceeded", sc.name+" budget exceeded")
 			return false
 		}
