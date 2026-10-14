@@ -73,6 +73,8 @@ func validModel(w http.ResponseWriter, in *repo.ModelInput) bool {
 	case len(in.Extra) > 0 && json.Unmarshal(in.Extra, new(llm.Extra)) != nil:
 		// The registry skips models whose extra doesn't decode; reject it here instead.
 		badRequest(w, "extra must be an object: vertex_project, vertex_location, headers (string map)")
+	case in.ContextWindow != nil && *in.ContextWindow <= 0:
+		badRequest(w, "context_window must be a positive token count")
 	default:
 		return true
 	}

@@ -58,6 +58,7 @@ export interface Model {
   price_output_micros: number
   price_cache_read_micros: number | null
   price_cache_write_micros: number | null
+  context_window: number | null
   extra: Record<string, unknown> | null
   access?: 'group' | 'granted' // only without models:write ("group" wins when both)
   created_at: string
