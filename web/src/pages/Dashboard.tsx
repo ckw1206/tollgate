@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { dash, usd, when } from '../api'
+import { dash, fmtTokens, usd, when } from '../api'
 import { useAuth } from '../auth'
 import GetStarted from '../components/GetStarted'
 import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Table, useLoad } from '../components/ui'
@@ -26,7 +26,7 @@ const SHOW_KEY = 'tollgate.recent'
 const tooltipStyle = { background: 'var(--background)', border: '1px solid var(--border)', color: 'var(--foreground)' }
 
 const metricOf = (r: SpendRow, m: Metric) => (m === 'cost' ? r.cost_nanos : m === 'requests' ? r.requests : r.input_tokens + r.output_tokens)
-const showMetric = (v: number, m: Metric) => (m === 'cost' ? usd(v) : fmt.format(v))
+const showMetric = (v: number, m: Metric) => (m === 'cost' ? usd(v) : m === 'tokens' ? fmtTokens(v) : fmt.format(v))
 const pct = (v: number, total: number) => `${total ? ((v / total) * 100).toFixed(1) : '0.0'}%`
 
 const storedShow = () => {
@@ -111,11 +111,11 @@ function DayInput({ label, value, min, max, onCommit }: { label: string; value: 
   )
 }
 
-function Stat({ label, value }: { label: string; value: string | null }) {
+function Stat({ label, value, title }: { label: string; value: string | null; title?: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="text-xs uppercase tracking-[0.04em] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-semibold tabular-nums">{value ?? <Skeleton className="mt-2 h-6 w-24" />}</div>
+      <div className="mt-1 text-2xl font-semibold tabular-nums" title={title}>{value ?? <Skeleton className="mt-2 h-6 w-24" />}</div>
     </div>
   )
 }
@@ -335,7 +335,7 @@ export default function Dashboard() {
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Spend" value={spend == null ? null : usd(spend)} />
         <Stat label="Requests" value={requests == null ? null : fmt.format(requests)} />
-        <Stat label="Tokens" value={tokens == null ? null : fmt.format(tokens)} />
+        <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Spend per day (USD)">
@@ -401,7 +401,18 @@ export default function Dashboard() {
           },
           { head: 'Model', cell: (l) => l.model_name },
           // Input counts cached tokens too, matching the stat cards and the Top models board.
-          { head: 'Tokens in / out', cell: (l) => `${fmt.format(l.input_tokens + l.cache_read_tokens + l.cache_write_tokens)} / ${fmt.format(l.output_tokens)}` },
+          {
+            head: 'Tokens in / out',
+            cell: (l) => {
+              const tin = l.input_tokens + l.cache_read_tokens + l.cache_write_tokens
+              const tout = l.output_tokens
+              return (
+                <span title={`${fmt.format(tin)} / ${fmt.format(tout)}`}>
+                  {fmtTokens(tin)} / {fmtTokens(tout)}
+                </span>
+              )
+            },
+          },
           { head: 'Cost', cell: (l) => usd(l.cost_nanos) },
           { head: 'Latency', cell: (l) => `${fmt.format(l.latency_ms)} ms` },
           // A stream that fails after headers were sent is recorded as status "error" with http_status 200.
