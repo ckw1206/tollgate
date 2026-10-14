@@ -26,12 +26,19 @@ import (
 	"tollgate/core/llm/providers"
 	"tollgate/core/spend"
 	"tollgate/core/vault"
+	"tollgate/core/webhook"
 	"tollgate/core/worker"
 	"tollgate/web"
 )
 
 // Set at build time: -ldflags "-X main.version=v1.2.3 -X main.commit=<sha>".
 var version, commit = "dev", ""
+
+// webhookDrainCap bounds the shutdown wait for the budget-webhook sender:
+// delivery is best-effort, so after this much the sender's context is
+// cancelled (in-flight request aborted, queue dropped) rather than drain a
+// full queue against a dead endpoint (~1h at 256 × 3 retries × 5s).
+const webhookDrainCap = 10 * time.Second
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -107,9 +114,25 @@ func serve() error {
 		return err
 	}
 
+	// Budget-crossing webhook (#24). The sender is the last hop in the spend path:
+	// Submit never blocks, every delivery failure is logged and dropped. The
+	// client is built by webhook.NewWebhookClient (the same constructor the
+	// test suite pins): its own timeout on top of the sender's per-attempt
+	// timeout, a transport whose dialer refuses internal addresses (SSRF guard:
+	// the URL is admin-configured), and no redirect following — a 3xx must fail
+	// loudly, not be chased as a bodyless GET.
+	webhookClient := webhook.NewWebhookClient(5 * time.Second)
+	ws := webhook.NewSender(store, webhookClient)
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	defer wsCancel()
+	go ws.Run(wsCtx)
+
 	rec := spend.NewRecorder(store)
 	recCtx, recCancel := context.WithCancel(context.Background())
 	defer recCancel() // cancel after HTTP drains, so no handler records into a stopped recorder
+	// Wired before Run starts so no flush can ever read OnCrossing nil-then-set
+	// from another goroutine (the first flush can beat the assignment).
+	rec.OnCrossing = func(c repo.BudgetCrossing) { ws.Submit(recCtx, c) }
 	go rec.Run(recCtx)
 
 	worker.Every(ctx, "budget_reset", time.Minute, func(ctx context.Context) error {
@@ -151,8 +174,23 @@ func serve() error {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("http shutdown", "err", err)
 	}
-	recCancel() // after HTTP drains, so no handler records into a stopped recorder
-	<-rec.Done()
+	recCancel()  // after HTTP drains, so no handler records into a stopped recorder
+	<-rec.Done() // the recorder's final flush (and its crossings) is done
+	// The sender outlives the recorder: crossings from the final flush were
+	// Submited after the signal, so the sender runs on its own context and is
+	// shut down only after the recorder's Done, draining them before exit.
+	// Drain is best-effort: cap the wait, then cancel the sender's context so
+	// the in-flight request is aborted and the rest of the queue is dropped —
+	// a dead endpoint must not hold a deploy (an hour per full queue) waiting
+	// on a notification nobody bills against.
+	ws.Close()
+	select {
+	case <-ws.Done():
+	case <-time.After(webhookDrainCap):
+		slog.Warn("webhook drain timed out; dropping queued crossings")
+		wsCancel()
+		<-ws.Done()
+	}
 	return nil
 }
 

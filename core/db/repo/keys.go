@@ -107,6 +107,10 @@ func (s *Store) UpdateKey(ctx context.Context, id string, in KeyInput) (*APIKey,
 		UPDATE api_keys k SET alias=$2, group_id=$3, models=$4, budget_nanos=$6, rpm_limit=$7, tpm_limit=$8, expires_at=$9,
 			spend_nanos     = CASE WHEN k.budget_type <> $5::budget_type THEN 0 ELSE k.spend_nanos END,
 			budget_reset_at = CASE WHEN k.budget_type <> $5::budget_type THEN next_budget_reset($5) ELSE k.budget_reset_at END,
+			-- Re-arm the one-shot notify marker (A11): the old window's thresholds
+			-- are meaningless once the cap or the window period changes.
+			budget_notified_window = CASE WHEN k.budget_type <> $5::budget_type OR k.budget_nanos <> $6 THEN NULL ELSE budget_notified_window END,
+			budget_notified_pct    = CASE WHEN k.budget_type <> $5::budget_type OR k.budget_nanos <> $6 THEN 0 ELSE budget_notified_pct END,
 			budget_type=$5
 		WHERE k.id=$1 AND k.rotated_at IS NULL AND k.revoked_at IS NULL RETURNING `+keyCols,
 		id, in.Alias, in.GroupID, nonNil(in.Models), in.BudgetType, in.BudgetNanos, in.RPMLimit, in.TPMLimit, in.ExpiresAt))
