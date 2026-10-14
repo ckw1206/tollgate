@@ -120,7 +120,7 @@ func TestSpendRequests_ScopedNewestFirstAndCapped(t *testing.T) {
 				Provider: "openai", CostNanos: 100, Status: "success", HTTPStatus: 200, CreatedAt: t0.Add(time.Duration(len(recs)) * time.Second)})
 		}
 	}
-	if err := e.store.RecordSpend(ctx, recs); err != nil {
+	if _, err := e.store.RecordSpend(ctx, recs); err != nil {
 		t.Fatal(err)
 	}
 	// member and viewer try to widen the scope with user_id; they only ever see their own rows

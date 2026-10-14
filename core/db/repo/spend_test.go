@@ -41,7 +41,7 @@ func TestRecordSpend_IncrementsCountersAndLogs(t *testing.T) {
 	f := newFixture(t, "monthly")
 	ctx := context.Background()
 	now := time.Now()
-	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, now), f.rec(250, now)}); err != nil {
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, now), f.rec(250, now)}); err != nil {
 		t.Fatal(err)
 	}
 	k, _ := f.s.GetKey(ctx, f.k.ID)
@@ -61,7 +61,7 @@ func TestRecordSpend_OldWindowRecordIsLoggedNotCharged(t *testing.T) {
 	now := time.Now()
 	old := now.AddDate(0, 0, -1)
 	// One record in the previous window, one in the current window.
-	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, old), f.rec(250, now)}); err != nil {
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(100, old), f.rec(250, now)}); err != nil {
 		t.Fatal(err)
 	}
 	k, _ := f.s.GetKey(ctx, f.k.ID)
@@ -80,7 +80,7 @@ func TestRecordSpend_InWindowRecordCharged(t *testing.T) {
 	f := newFixture(t, "daily")
 	ctx := context.Background()
 	now := time.Now()
-	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(350, now)}); err != nil {
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(350, now)}); err != nil {
 		t.Fatal(err)
 	}
 	k, _ := f.s.GetKey(ctx, f.k.ID)
@@ -94,7 +94,7 @@ func TestRecordSpend_TotalBudgetUnaffected(t *testing.T) {
 	ctx := context.Background()
 	// total has no window, so even an old record is charged.
 	old := time.Now().AddDate(0, 0, -1)
-	if err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(400, old)}); err != nil {
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(400, old)}); err != nil {
 		t.Fatal(err)
 	}
 	k, _ := f.s.GetKey(ctx, f.k.ID)
@@ -175,6 +175,104 @@ func forceDue(t *testing.T, f fixture) {
 	t.Helper()
 	if err := f.s.ExecForTest(context.Background(), `UPDATE api_keys SET budget_reset_at = now() - interval '1 second'`); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRecordSpend_Crosses80OnceThen100Once(t *testing.T) {
+	f := newFixture(t, "daily") // budget_nanos = 1e9: 80% = 800M, 100% = 1000M
+	ctx := context.Background()
+	now := time.Now()
+
+	// 0 -> 900M: crosses 80% only.
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 1 || cx[0].Threshold != 80 || cx[0].Scope != "key" || cx[0].Label != "k" {
+		t.Fatalf("batch1: got %+v, want one 80 key crossing (label k)", cx)
+	}
+	if cx[0].SpendNanos != 900_000_000 || cx[0].BudgetNanos != 1_000_000_000 {
+		t.Fatalf("batch1 spend/budget: %+v", cx[0])
+	}
+
+	// 900M -> 1050M: crosses 100% only (80% already notified this window).
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(150_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 1 || cx[0].Threshold != 100 || cx[0].SpendNanos != 1_050_000_000 {
+		t.Fatalf("batch2: got %+v, want one 100 crossing at 1050M", cx)
+	}
+
+	// Same window, already at/over both thresholds: no new crossings.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(10_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("batch3: got %+v, want zero crossings", cx)
+	}
+}
+
+func TestRecordSpend_CrossingFiresAgainAfterReset(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil || len(cx) != 1 || cx[0].Threshold != 80 {
+		t.Fatalf("setup: cx=%+v err=%v, want one 80 crossing", cx, err)
+	}
+	// Force the window due and run the reset: zeroes spend, schedules next
+	// window, and clears the notify marker.
+	forceDue(t, f)
+	if _, err := f.s.ResetBudgets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh batch crossing 80% again must fire once more (marker reset).
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 1 || cx[0].Threshold != 80 || cx[0].SpendNanos != 900_000_000 {
+		t.Fatalf("after reset: got %+v, want one fresh 80 crossing at 900M", cx)
+	}
+}
+
+func TestRecordSpend_CrossingFiresInExpiredWindowBeforeReset(t *testing.T) {
+	f := newFixture(t, "daily")
+	ctx := context.Background()
+	now := time.Now()
+	// Fill the current window to the cap.
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_000_000_000, now)}); err != nil {
+		t.Fatal(err)
+	}
+	// Expire the window (worker not yet run): raw spend_nanos is still 1000M,
+	// but the new window's effective spend is 0.
+	forceDue(t, f)
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 1 || cx[0].Threshold != 80 || cx[0].Scope != "key" {
+		t.Fatalf("expired window: got %+v, want one 80 key crossing", cx)
+	}
+	// SpendNanos reflects only the new window (900M), not the stale 1000M.
+	if cx[0].SpendNanos != 900_000_000 {
+		t.Fatalf("SpendNanos=%d, want 900M (not the stale 1000M)", cx[0].SpendNanos)
+	}
+}
+
+func TestRecordSpend_TotalBudgetNeverCrosses(t *testing.T) {
+	f := newFixture(t, "total")
+	ctx := context.Background()
+	now := time.Now()
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(5_000_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("total budget: got %+v, want zero crossings", cx)
 	}
 }
 

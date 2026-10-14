@@ -59,13 +59,13 @@ type SpendRow struct {
 // only; enforcement reads EffectiveSpend, and the reset worker zeroes a
 // window's spend when it rolls over, so a record charged to a window that has
 // already expired is simply dropped on the next reset rather than double-counted.
-func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
+func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCrossing, error) {
 	if len(recs) == 0 {
-		return nil
+		return nil, nil
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -83,13 +83,13 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 		groupSet[r.GroupID] = true
 	}
 
-	keyLims, err := budgetWindows(ctx, tx, "api_keys", idsFromSet(keySet))
+	keyLims, keyLabels, err := budgetWindows(ctx, tx, "api_keys", idsFromSet(keySet))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	groupLims, err := budgetWindows(ctx, tx, "groups", idsFromSet(groupSet))
+	groupLims, groupLabels, err := budgetWindows(ctx, tx, "groups", idsFromSet(groupSet))
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	now := time.Now()
@@ -100,44 +100,115 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) error {
 		"key_id", "user_id", "group_id", "model_id", "model_name", "provider",
 		"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_nanos",
 		"latency_ms", "status", "http_status", "error_message", "created_at"}, pgx.CopyFromRows(rows)); err != nil {
-		return fmt.Errorf("copy spend_logs: %w", err)
+		return nil, fmt.Errorf("copy spend_logs: %w", err)
 	}
 	for id, c := range keyCost {
 		if _, err := tx.Exec(ctx, `UPDATE api_keys SET spend_nanos = spend_nanos + $2, last_used_at = now() WHERE id=$1`, id, c); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	for id, c := range groupCost {
 		if _, err := tx.Exec(ctx, `UPDATE groups SET spend_nanos = spend_nanos + $2 WHERE id=$1`, id, c); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return tx.Commit(ctx)
-}
 
-// budgetWindows fetches the window fields for the given ids from table
-// (api_keys or groups). One query per scope type; these tables are small.
-func budgetWindows(ctx context.Context, q pgx.Tx, table string, ids []string) (map[string]Limits, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	rows, err := q.Query(ctx,
-		`SELECT id, budget_type, budget_nanos, spend_nanos, budget_reset_at FROM `+table+
-			` WHERE id = ANY($1::uuid[])`, ids)
+	// Crossing detection runs after the counter UPDATEs, before commit, using
+	// the pre-batch limits and in-window costs already fetched above.
+	crossings, err := s.detectCrossings(ctx, tx, "api_keys", "key", keyLims, keyLabels, keyCost, now)
 	if err != nil {
 		return nil, err
 	}
+	gx, err := s.detectCrossings(ctx, tx, "groups", "group", groupLims, groupLabels, groupCost, now)
+	if err != nil {
+		return nil, err
+	}
+	crossings = append(crossings, gx...)
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return crossings, nil
+}
+
+// detectCrossings fires a one-shot BudgetCrossing for each scope whose
+// effective spend crosses the 80% or 100% threshold in its current window.
+// effOld is the pre-batch effective spend (0 for an expired-but-not-yet-reset
+// window); effNew is effOld plus this batch's in-window cost. Scopes with no
+// window (total/unlimited) or no cap are skipped. The marker UPDATE is atomic:
+// a threshold fires only if the stored notify window differs from this
+// window's start OR the stored pct is below the threshold, so each threshold
+// fires once per window.
+func (s *Store) detectCrossings(ctx context.Context, tx pgx.Tx, table, scope string,
+	lims map[string]Limits, labels map[string]string, costs map[string]int64, now time.Time) ([]BudgetCrossing, error) {
+	var out []BudgetCrossing
+	for id, lim := range lims {
+		ws := lim.WindowStart(now)
+		if ws == nil || lim.BudgetNanos <= 0 {
+			continue // total/unlimited/no cap: never crosses
+		}
+		effOld := lim.EffectiveSpend(now)
+		effNew := effOld + costs[id]
+		for _, t := range []int64{80, 100} {
+			thr := t * lim.BudgetNanos / 100
+			if thr <= 0 || effOld >= thr || effNew < thr {
+				continue
+			}
+			tag, err := tx.Exec(ctx,
+				`UPDATE `+table+` SET budget_notified_window = $2, budget_notified_pct = GREATEST(budget_notified_pct, $3)
+				 WHERE id = $1 AND (budget_notified_window IS DISTINCT FROM $2 OR budget_notified_pct < $3)`,
+				id, *ws, int16(t))
+			if err != nil {
+				return nil, err
+			}
+			if tag.RowsAffected() == 1 {
+				out = append(out, BudgetCrossing{
+					Scope:         scope,
+					ID:            id,
+					Label:         labels[id],
+					Threshold:     int(t),
+					SpendNanos:    effNew,
+					BudgetNanos:   lim.BudgetNanos,
+					BudgetType:    lim.BudgetType,
+					BudgetResetAt: lim.BudgetResetAt,
+				})
+			}
+		}
+	}
+	return out, nil
+}
+
+// budgetWindows fetches the window fields and human label for the given ids
+// from table (api_keys or groups). One query per scope type; these tables are
+// small. The label (alias for keys, name for groups) is returned alongside so
+// crossing reports can name the scope without exposing a raw key/hash.
+func budgetWindows(ctx context.Context, q pgx.Tx, table string, ids []string) (map[string]Limits, map[string]string, error) {
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	labelCol := "name"
+	if table == "api_keys" {
+		labelCol = "alias"
+	}
+	rows, err := q.Query(ctx,
+		`SELECT id, `+labelCol+`, budget_type, budget_nanos, spend_nanos, budget_reset_at FROM `+table+
+			` WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, nil, err
+	}
 	defer rows.Close()
 	out := make(map[string]Limits, len(ids))
+	labels := make(map[string]string, len(ids))
 	for rows.Next() {
-		var id string
+		var id, label string
 		var l Limits
-		if err := rows.Scan(&id, &l.BudgetType, &l.BudgetNanos, &l.SpendNanos, &l.BudgetResetAt); err != nil {
-			return nil, err
+		if err := rows.Scan(&id, &label, &l.BudgetType, &l.BudgetNanos, &l.SpendNanos, &l.BudgetResetAt); err != nil {
+			return nil, nil, err
 		}
 		out[id] = l
+		labels[id] = label
 	}
-	return out, rows.Err()
+	return out, labels, rows.Err()
 }
 
 // inWindowCosts returns each scope id's in-window cost. Every distinct id in
@@ -170,10 +241,13 @@ func idsFromSet(m map[string]bool) []string {
 }
 
 // ResetBudgets zeroes every daily/monthly window that's due and schedules the next one.
+// It also clears the one-shot notify marker on the resetting rows, so the new
+// window can report its first crossing fresh (per-window notify state, #24).
 func (s *Store) ResetBudgets(ctx context.Context) (int64, error) {
 	var total int64
 	for _, table := range []string{"api_keys", "groups"} {
-		tag, err := s.pool.Exec(ctx, `UPDATE `+table+` SET spend_nanos = 0, budget_reset_at = next_budget_reset(budget_type)
+		tag, err := s.pool.Exec(ctx, `UPDATE `+table+` SET spend_nanos = 0, budget_reset_at = next_budget_reset(budget_type),
+			budget_notified_window = NULL, budget_notified_pct = 0
 			WHERE budget_type IN ('daily','monthly') AND budget_reset_at <= now()`)
 		if err != nil {
 			return total, err

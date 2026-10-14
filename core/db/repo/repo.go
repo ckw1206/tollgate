@@ -83,6 +83,22 @@ func (l Limits) isWindowed() bool {
 	return l.BudgetType == "daily" || l.BudgetType == "monthly"
 }
 
+// BudgetCrossing reports that a key or group's effective spend crossed a
+// threshold (80% or 100% of its budget cap) within the current window. It is
+// fired at most once per scope per threshold per window (enforced by the
+// one-shot notify marker). Label is the key alias or group name — never a raw
+// key, hash, or prefix.
+type BudgetCrossing struct {
+	Scope       string     `json:"scope"` // "key" or "group"
+	ID          string     `json:"id"`
+	Label       string     `json:"label"` // key alias or group name (never a raw key/hash/prefix)
+	Threshold   int        `json:"threshold"`   // 80 or 100
+	SpendNanos  int64      `json:"spend_nanos"` // effective spend after this batch
+	BudgetNanos int64      `json:"budget_nanos"`
+	BudgetType  string     `json:"budget_type"`
+	BudgetResetAt *time.Time `json:"budget_reset_at"` // the current window's reset instant
+}
+
 func HashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])

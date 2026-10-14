@@ -19,6 +19,10 @@ type Recorder struct {
 	FlushEvery time.Duration
 	BatchSize  int
 
+	// OnCrossing is called for each budget crossing fired by a successful
+	// RecordSpend. Nil discards them. (Wired to a webhook in a later task.)
+	OnCrossing func(repo.BudgetCrossing)
+
 	store *repo.Store
 	ch    chan repo.SpendRecord
 	done  chan struct{}
@@ -45,15 +49,19 @@ func (r *Recorder) Run(ctx context.Context) {
 		if len(buf) == 0 {
 			return
 		}
-		err := r.store.RecordSpend(ctx, buf)
+		crossings, err := r.store.RecordSpend(ctx, buf)
 		var pg *pgconn.PgError
 		if errors.As(err, &pg) && strings.HasPrefix(pg.Code, "23") {
 			// Integrity error (e.g. a model deleted while its records sat in the buffer):
 			// retrying the batch would fail forever and block all billing. Write records
 			// one by one and drop only the ones that can't be stored.
 			for _, rec := range buf {
-				if err := r.store.RecordSpend(ctx, []repo.SpendRecord{rec}); err != nil {
+				if cs, err := r.store.RecordSpend(ctx, []repo.SpendRecord{rec}); err != nil {
 					slog.Error("dropping unrecordable spend record", "key", rec.KeyID, "model", rec.ModelName, "cost_nanos", rec.CostNanos, "err", err)
+				} else if r.OnCrossing != nil {
+					for _, c := range cs {
+						r.OnCrossing(c)
+					}
 				}
 			}
 			buf = nil
@@ -66,6 +74,11 @@ func (r *Recorder) Run(ctx context.Context) {
 				buf = buf[len(buf)-maxBuffered:]
 			}
 			return
+		}
+		if r.OnCrossing != nil {
+			for _, c := range crossings {
+				r.OnCrossing(c)
+			}
 		}
 		buf = nil
 	}
