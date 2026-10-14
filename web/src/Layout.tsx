@@ -23,6 +23,7 @@ export const PEOPLE_TABS: Tab[] = [
   { to: '/people', label: 'Users', perm: 'users:read' },
   { to: '/people/groups', label: 'Groups', perm: 'groups:read_own' },
   { to: '/people/invites', label: 'Invites', perm: 'invites:read' },
+  { to: '/people/access', label: 'Model access', perm: 'groups:write' },
 ]
 
 const REPO = 'https://github.com/ckw1206/tollgate'

@@ -136,8 +136,9 @@ export function ConfirmDialog({ title, body, confirm, onConfirm, onClose, varian
 }
 
 export interface Col<T> {
-  head: string
+  head: ReactNode
   cell: (row: T) => ReactNode
+  center?: boolean
 }
 
 // rows === null means still loading: three skeleton rows.
@@ -176,7 +177,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
     })
   const last = cols.length - 1
   const span = cols.length + (expand ? 1 : 0)
-  const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''}`
+  const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''} ${cols[i].center ? 'text-center' : ''}`
   return (
     <div ref={wrapRef} className="overflow-x-auto rounded-md border border-border">
       <table className="min-w-full text-sm">
@@ -184,7 +185,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
           <tr className="h-10">
             {expand && <th className="w-10" aria-label="Expand" />}
             {cols.map((c, i) => (
-              <th key={i} className="whitespace-nowrap px-3 font-medium">{c.head}</th>
+              <th key={i} className={`whitespace-nowrap px-3 font-medium ${c.center ? 'text-center' : ''}`}>{c.head}</th>
             ))}
           </tr>
         </thead>
@@ -402,9 +403,10 @@ export function Segmented<V extends string | number>({ options, value, onChange,
 export function useLoad<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState('')
-  const reload = useCallback(() => {
+  // reload resolves once the new data (or error) is in state.
+  const reload = useCallback(async () => {
     if (!path) return
-    api<T>(path).then(
+    await api<T>(path).then(
       (d) => {
         setData(d)
         setError('')
@@ -412,7 +414,7 @@ export function useLoad<T>(path: string | null) {
       (e: Error) => setError(e.message),
     )
   }, [path])
-  useEffect(reload, [reload])
+  useEffect(() => void reload(), [reload])
   return { data, error, reload }
 }
 
@@ -460,15 +462,19 @@ export interface MultiOption {
 }
 
 // MultiSelect: wrapping chips + a popover listbox with search, an "All" row and a
-// "N selected · Clear" footer. value [] means All. Keyboard: Enter/Space/↓ opens, ↑↓ move,
+// "N selected · Clear" footer. value [] means All; with noAll there is no All row and []
+// means none (allLabel then names the empty state). allHint follows allLabel on the trigger,
+// allSub on the list's All row. Keyboard: Enter/Space/↓ opens, ↑↓ move,
 // Space or Enter toggles, Esc closes, Backspace (empty search or on the trigger) drops the
 // last chip. staleIds are picks that are no longer options: shown as warning chips.
-export function MultiSelect({ options, value, onChange, allLabel, allHint, renderOption, staleIds = [], labelledBy }: {
+export function MultiSelect({ options, value, onChange, allLabel, allHint, allSub, noAll = false, renderOption, staleIds = [], labelledBy }: {
   options: MultiOption[]
   value: string[]
   onChange: (v: string[]) => void
   allLabel: string
   allHint?: string
+  allSub?: string
+  noAll?: boolean
   renderOption?: (o: MultiOption) => ReactNode
   staleIds?: string[]
   labelledBy?: string
@@ -482,7 +488,7 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
   const byId = new Map(options.map((o) => [o.id, o]))
   const q = query.trim().toLowerCase()
   const shown = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options
-  const rows: (MultiOption | null)[] = q ? shown : [null, ...shown] // null = All
+  const rows: (MultiOption | null)[] = q || noAll ? shown : [null, ...shown] // null = All
 
   useEffect(() => {
     if (!open) return
@@ -602,7 +608,7 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
                       {o.meta && <span className="text-xs text-muted-foreground">{o.meta}</span>}
                     </>
                   ) : (
-                    <span className="flex-1">{allLabel}{allHint && <span className="text-xs text-muted-foreground"> · {allHint}</span>}</span>
+                    <span className="flex-1">{allLabel}{allSub && <span className="text-xs text-muted-foreground"> · {allSub}</span>}</span>
                   )}
                 </li>
               )
@@ -620,6 +626,38 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, rende
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// CheckButton: a 20px square toggle for grids (aria-pressed). dim = ticked by something
+// else (e.g. "All models"), shown at 45% opacity.
+export function CheckButton({ on, dim = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { on: boolean; dim?: boolean }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      className={`inline-flex h-5 w-5 items-center justify-center border align-middle text-xs font-bold text-primary-foreground disabled:cursor-wait ${on ? 'border-primary bg-primary' : 'border-input bg-transparent'} ${dim ? 'opacity-45' : ''}`}
+      {...props}
+    >
+      {on && '✓'}
+    </button>
+  )
+}
+
+// Toast: a bottom-right notice with an optional action (e.g. Undo) that closes itself after
+// `ms`. Give it a new `key` per notice so the timer restarts.
+export function Toast({ children, action, onAction, onClose, ms = 5000 }: { children: ReactNode; action?: string; onAction?: () => void; onClose: () => void; ms?: number }) {
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const t = setTimeout(() => close.current(), ms)
+    return () => clearTimeout(t)
+  }, [ms])
+  return (
+    <div role="status" className="fixed bottom-4 right-4 z-50 flex max-w-[calc(100%-2rem)] items-center gap-4 rounded-md border border-border bg-background py-2 pl-4 pr-2 text-sm shadow-dialog">
+      <span>{children}</span>
+      {action && <Button size="sm" variant="ghost" onClick={onAction}>{action}</Button>}
     </div>
   )
 }

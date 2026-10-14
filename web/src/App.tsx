@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, Gate, RequireAuth } from './auth'
 import Layout from './Layout'
+import Access from './pages/Access'
 import Audit from './pages/Audit'
 import Credentials from './pages/Credentials'
 import Dashboard from './pages/Dashboard'
@@ -22,6 +23,7 @@ const pages = [
   { path: 'models/credentials', perm: 'models:write', el: <Credentials /> },
   { path: 'people/groups', perm: 'groups:read_own', el: <Groups /> },
   { path: 'people/invites', perm: 'invites:read', el: <Invites /> },
+  { path: 'people/access', perm: 'groups:write', el: <Access /> },
   { path: 'audit', perm: 'audit:read', el: <Audit /> },
   { path: 'settings', perm: 'settings:read', el: <Settings /> },
 ]

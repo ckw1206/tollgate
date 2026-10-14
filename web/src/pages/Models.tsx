@@ -57,7 +57,13 @@ export default function Models() {
   const credName = (id: string | null) => (id ? creds.data?.find((c) => c.id === id)?.name ?? id.slice(0, 8) : '—')
   return (
     <>
-      <PageHeader title="Models" tabs={MODEL_TABS}>{writable && <Button onClick={() => open('new')}>Add model</Button>}</PageHeader>
+      <PageHeader
+        title="Models"
+        tabs={MODEL_TABS}
+        description={writable ? undefined : 'Models you can use — from your group, plus any an admin granted to you. Need another? Ask an admin.'}
+      >
+        {writable && <Button onClick={() => open('new')}>Add model</Button>}
+      </PageHeader>
       <div className="mb-4 space-y-1">
         <ErrorText>{models.error}</ErrorText>
         <ErrorText>{pageError}</ErrorText>
@@ -84,6 +90,8 @@ export default function Models() {
           { head: 'Provider', cell: (m) => `${m.provider} · ${m.upstream_model}` },
           { head: '$ / 1M in · out', cell: (m) => `${fromMicros(m.price_input_micros)} · ${fromMicros(m.price_output_micros)}` },
           ...(writable ? [{ head: 'Credential', cell: (m: Model) => credName(m.credential_id) }] : []),
+          // Without models:write the server lists only your enabled, allowed models.
+          ...(writable ? [] : [{ head: 'Your access', cell: (m: Model) => (m.access === 'granted' ? 'granted to you' : 'group') }]),
           { head: 'Status', cell: (m) => (m.enabled ? <Badge tone="success">enabled</Badge> : <Badge tone="inactive">disabled</Badge>) },
         ]}
       />

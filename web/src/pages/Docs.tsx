@@ -225,7 +225,7 @@ const HEALTH_RESP = `{"postgres": "ok", "redis": "ok"}
 {"postgres": "ok", "redis": "down"}`
 
 const CHAT_PARAMS = [
-  { name: 'model', type: 'string', req: true, desc: 'Tollgate model name from Your models. 404 model_not_found if unknown or disabled; 403 model_not_allowed if your key excludes it.' },
+  { name: 'model', type: 'string', req: true, desc: 'Tollgate model name from Your models. 404 model_not_found if unknown or disabled; 403 model_not_allowed if your key, user or group excludes it.' },
   { name: 'messages', type: 'array', req: true, desc: 'Roles system, user, assistant. content is a string or parts of type text / image_url. Google accepts only base64 data: image URLs.' },
   { name: 'stream', type: 'boolean', desc: 'Server-sent events. See Streaming.' },
   { name: 'stream_options.include_usage', type: 'boolean', desc: 'Adds a final usage chunk to the stream.' },
@@ -250,7 +250,7 @@ const ERRORS = [
   { s: '401', code: 'invalid_api_key', desc: 'Missing or unknown key.', retry: 'No' },
   { s: '403', code: 'key_blocked', desc: 'Key revoked or owner disabled. Ask an admin.', retry: 'No' },
   { s: '403', code: 'key_expired', desc: 'Key past expiry. Rotate it.', retry: 'No' },
-  { s: '403', code: 'model_not_allowed', desc: "Model isn't in this key's Allowed models.", retry: 'No' },
+  { s: '403', code: 'model_not_allowed', desc: "Model isn't allowed for this key, its owner or the owner's group.", retry: 'No' },
   { s: '404', code: 'model_not_found', desc: 'Unknown or disabled model name.', retry: 'No' },
   { s: '404', code: 'not_found', desc: 'No such endpoint (e.g. GET /v1/models/{id}).', retry: 'No' },
   { s: '413', code: 'request_too_large', desc: 'Body over 20 MiB.', retry: 'No' },
