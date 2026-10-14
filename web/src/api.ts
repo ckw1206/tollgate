@@ -33,8 +33,18 @@ export async function api<T>(path: string, opts: { method?: string; body?: unkno
   return data as T
 }
 
-// Fire a test event to the configured budget webhook. 200 = delivered; 5xx = failed.
-export const sendWebhookTest = () => api<void>('/console/api/v1/settings/webhook/test', { method: 'POST' })
+// Outcome of a webhook test. The server always answers 200 with this shape
+// (status = upstream HTTP status, 0 when unreachable); message is redacted server-side.
+export interface WebhookTestResult {
+  ok: boolean
+  status: number
+  message: string
+}
+
+// Fire a test event to the budget webhook. With `url`, test that (the value edited in the
+// form, which may not be saved yet); without, the server tests the stored setting.
+export const sendWebhookTest = (url?: string) =>
+  api<WebhookTestResult>('/console/api/v1/settings/webhook/test', { method: 'POST', body: url ? { url } : undefined })
 
 // Money: spend/budgets are nano-USD, prices are micro-USD per 1M tokens.
 export const usd = (nanos: number) => {
