@@ -403,15 +403,21 @@ export function Segmented<V extends string | number>({ options, value, onChange,
 export function useLoad<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState('')
-  // reload resolves once the new data (or error) is in state.
+  // reload resolves once the new data (or error) is in state. Only the latest request may set
+  // it: a slower response for a path (or reload) since superseded is dropped.
+  const seq = useRef(0)
   const reload = useCallback(async () => {
+    const n = ++seq.current
     if (!path) return
     await api<T>(path).then(
       (d) => {
+        if (n !== seq.current) return
         setData(d)
         setError('')
       },
-      (e: Error) => setError(e.message),
+      (e: Error) => {
+        if (n === seq.current) setError(e.message)
+      },
     )
   }, [path])
   useEffect(() => void reload(), [reload])
