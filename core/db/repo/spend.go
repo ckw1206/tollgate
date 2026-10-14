@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,16 +31,20 @@ type SpendRecord struct {
 type SpendLog struct {
 	ID int64 `json:"id"`
 	SpendRecord
+	KeyAlias   string `json:"key_alias"`
+	KeyPrefix  string `json:"key_prefix"`
+	OwnerEmail string `json:"owner_email"`
 }
 
 type SpendFilter struct {
 	UserID, GroupID, KeyID string
 	From, To               time.Time
-	GroupBy                string // day | model | key | user
+	GroupBy                string // day | model | key | user | model,day
 }
 
 type SpendRow struct {
 	Bucket       string `json:"bucket"`
+	Day          string `json:"day,omitempty"` // group_by=model,day only; Bucket is then the model
 	Requests     int64  `json:"requests"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
@@ -112,19 +117,29 @@ func (s *Store) DeleteSpendBefore(ctx context.Context, t time.Time) (int64, erro
 const spendWhere = `WHERE created_at >= $1 AND created_at < $2
 	AND ($3 = '' OR user_id::text = $3) AND ($4 = '' OR group_id::text = $4) AND ($5 = '' OR key_id::text = $5)`
 
+// spendDay buckets by calendar day in the server timezone.
+const spendDay = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM-DD')`
+
+var ErrGroupBy = errors.New("group_by must be day, model, key, user, or model,day")
+
 func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, error) {
 	bucket := map[string]string{
-		"day":   `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM-DD')`,
-		"model": `model_name`,
-		"key":   `key_id::text`,
-		"user":  `user_id::text`,
+		"day":       spendDay,
+		"model":     `model_name`,
+		"model,day": `model_name`,
+		"key":       `key_id::text`,
+		"user":      `user_id::text`,
 	}[f.GroupBy]
 	if bucket == "" {
-		return nil, fmt.Errorf("group_by must be day, model, key, or user")
+		return nil, ErrGroupBy
+	}
+	day := `''`
+	if f.GroupBy == "model,day" {
+		day = spendDay
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+bucket+` AS b, count(*), sum(input_tokens + cache_read_tokens + cache_write_tokens), sum(output_tokens), sum(cost_nanos)
-		FROM spend_logs `+spendWhere+` GROUP BY b ORDER BY b`,
+		SELECT `+bucket+` AS b, `+day+` AS d, count(*), sum(input_tokens + cache_read_tokens + cache_write_tokens), sum(output_tokens), sum(cost_nanos)
+		FROM spend_logs `+spendWhere+` GROUP BY b, d ORDER BY d, b`,
 		f.From, f.To, f.UserID, f.GroupID, f.KeyID)
 	if err != nil {
 		return nil, err
@@ -133,7 +148,7 @@ func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, erro
 	var out []SpendRow
 	for rows.Next() {
 		var r SpendRow
-		if err := rows.Scan(&r.Bucket, &r.Requests, &r.InputTokens, &r.OutputTokens, &r.CostNanos); err != nil {
+		if err := rows.Scan(&r.Bucket, &r.Day, &r.Requests, &r.InputTokens, &r.OutputTokens, &r.CostNanos); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -141,11 +156,16 @@ func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, erro
 	return out, rows.Err()
 }
 
+// RecentSpend returns the newest logs in the filter, with the key's alias and prefix and the
+// owner's email. spend_logs is limited in a subquery first, so spendWhere's columns stay unambiguous.
 func (s *Store) RecentSpend(ctx context.Context, f SpendFilter, limit int) ([]SpendLog, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, key_id, user_id, group_id, model_id, model_name, provider, input_tokens, output_tokens,
-			cache_read_tokens, cache_write_tokens, cost_nanos, latency_ms, status, http_status, COALESCE(error_message, ''), created_at
-		FROM spend_logs `+spendWhere+` ORDER BY id DESC LIMIT $6`,
+		SELECT l.id, l.key_id, l.user_id, l.group_id, l.model_id, l.model_name, l.provider, l.input_tokens, l.output_tokens,
+			l.cache_read_tokens, l.cache_write_tokens, l.cost_nanos, l.latency_ms, l.status, l.http_status, COALESCE(l.error_message, ''), l.created_at,
+			k.alias, k.key_prefix, u.email
+		FROM (SELECT * FROM spend_logs `+spendWhere+` ORDER BY created_at DESC, id DESC LIMIT $6) l
+		JOIN api_keys k ON k.id = l.key_id JOIN users u ON u.id = l.user_id
+		ORDER BY l.created_at DESC, l.id DESC`,
 		f.From, f.To, f.UserID, f.GroupID, f.KeyID, limit)
 	if err != nil {
 		return nil, err
@@ -156,7 +176,7 @@ func (s *Store) RecentSpend(ctx context.Context, f SpendFilter, limit int) ([]Sp
 		var l SpendLog
 		if err := rows.Scan(&l.ID, &l.KeyID, &l.UserID, &l.GroupID, &l.ModelID, &l.ModelName, &l.Provider,
 			&l.InputTokens, &l.OutputTokens, &l.CacheReadTokens, &l.CacheWriteTokens, &l.CostNanos,
-			&l.LatencyMS, &l.Status, &l.HTTPStatus, &l.ErrorMessage, &l.CreatedAt); err != nil {
+			&l.LatencyMS, &l.Status, &l.HTTPStatus, &l.ErrorMessage, &l.CreatedAt, &l.KeyAlias, &l.KeyPrefix, &l.OwnerEmail); err != nil {
 			return nil, err
 		}
 		out = append(out, l)

@@ -104,6 +104,7 @@ export interface AuditEntry {
 
 export interface SpendRow {
   bucket: string
+  day?: string // YYYY-MM-DD, group_by=model,day only (bucket is then the model)
   requests: number
   input_tokens: number
   output_tokens: number
@@ -125,6 +126,9 @@ export interface SpendLog {
   http_status: number
   error_message: string
   created_at: string
+  key_alias: string
+  key_prefix: string
+  owner_email: string
 }
 
 export interface Settings {

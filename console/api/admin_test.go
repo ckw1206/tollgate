@@ -80,18 +80,82 @@ func TestSpend_MemberSeesOnlyOwn(t *testing.T) {
 			Provider: "openai", CostNanos: 100, Status: "success", HTTPStatus: 200, CreatedAt: time.Now()})
 	}
 	e.store.RecordSpend(ctx, recs)
-	type out struct {
-		Rows   []repo.SpendRow
-		Recent []repo.SpendLog
-	}
+	type out struct{ Rows []repo.SpendRow }
 	// member tries to widen the scope with user_id; it must be ignored
 	got := decodeInto[out](t, e.as("member@x.io", "GET", "/console/api/v1/spend?group_by=user&user_id="+e.admin.ID, nil))
-	if len(got.Rows) != 1 || got.Rows[0].Bucket != e.member.ID || len(got.Recent) != 1 {
+	if len(got.Rows) != 1 || got.Rows[0].Bucket != e.member.ID {
 		t.Fatalf("member: %+v", got)
 	}
 	all := decodeInto[out](t, e.as("admin@x.io", "GET", "/console/api/v1/spend?group_by=user", nil))
 	if len(all.Rows) != 2 {
 		t.Fatalf("admin: %+v", all)
+	}
+	md := decodeInto[out](t, e.as("member@x.io", "GET", "/console/api/v1/spend?group_by=model,day", nil))
+	if len(md.Rows) != 1 || md.Rows[0].Bucket != "m" || md.Rows[0].Day != time.Now().UTC().Format("2006-01-02") || md.Rows[0].CostNanos != 100 {
+		t.Fatalf("model,day: %+v", md)
+	}
+	if w := e.as("member@x.io", "GET", "/console/api/v1/spend?group_by=week", nil); w.Code != 400 {
+		t.Fatalf("bad group_by: %d", w.Code)
+	}
+}
+
+func TestSpendRequests_ScopedNewestFirstAndCapped(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	m, _ := e.store.CreateModel(ctx, repo.ModelInput{Name: "m", Provider: "openai", UpstreamModel: "m", Enabled: true, Extra: json.RawMessage(`{}`)})
+	var recs []repo.SpendRecord
+	var raws []string
+	t0 := time.Now().Add(-time.Hour)
+	for _, u := range []*repo.User{e.admin, e.member, e.viewer} {
+		raw, k, _ := e.store.CreateKey(ctx, u.ID, repo.KeyInput{Alias: "key-" + u.Role, GroupID: e.group.ID, BudgetType: "unlimited"})
+		raws = append(raws, raw)
+		n := 1
+		if u == e.admin {
+			n = 120 // more than the 100 cap
+		}
+		for range n { // one second apart, in insertion order
+			recs = append(recs, repo.SpendRecord{KeyID: k.ID, UserID: u.ID, GroupID: e.group.ID, ModelID: m.ID, ModelName: "m",
+				Provider: "openai", CostNanos: 100, Status: "success", HTTPStatus: 200, CreatedAt: t0.Add(time.Duration(len(recs)) * time.Second)})
+		}
+	}
+	if err := e.store.RecordSpend(ctx, recs); err != nil {
+		t.Fatal(err)
+	}
+	// member and viewer try to widen the scope with user_id; they only ever see their own rows
+	for _, u := range []*repo.User{e.member, e.viewer} {
+		got := decodeInto[[]repo.SpendLog](t, e.as(u.Email, "GET", "/console/api/v1/spend/requests?limit=100&user_id="+e.admin.ID, nil))
+		if len(got) != 1 || got[0].UserID != u.ID || got[0].OwnerEmail != u.Email || got[0].KeyAlias != "key-"+u.Role {
+			t.Fatalf("%s: %+v", u.Email, got)
+		}
+	}
+	w := e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?limit=100", nil)
+	for _, s := range append(raws, "key_hash") {
+		if strings.Contains(w.Body.String(), s) {
+			t.Fatalf("leaks key material %q", s)
+		}
+	}
+	owners := map[string]bool{}
+	for _, l := range decodeInto[[]repo.SpendLog](t, w) {
+		if l.KeyPrefix == "" || l.KeyAlias != "key-"+strings.TrimSuffix(l.OwnerEmail, "@x.io") {
+			t.Fatalf("row %+v", l)
+		}
+		owners[l.OwnerEmail] = true
+	}
+	if len(owners) != 3 {
+		t.Fatalf("admin sees owners %v", owners)
+	}
+	def := decodeInto[[]repo.SpendLog](t, e.as("admin@x.io", "GET", "/console/api/v1/spend/requests", nil))
+	if len(def) != 10 || def[0].OwnerEmail != "viewer@x.io" || def[1].OwnerEmail != "member@x.io" || !def[1].CreatedAt.After(def[2].CreatedAt) {
+		t.Fatalf("admin default: %d rows, first %+v", len(def), def[0])
+	}
+	if got := decodeInto[[]repo.SpendLog](t, e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?limit=500", nil)); len(got) != 100 {
+		t.Fatalf("limit=500 returned %d rows", len(got))
+	}
+	if w := e.as("admin@x.io", "GET", "/console/api/v1/spend/requests?from=yesterday", nil); w.Code != 400 {
+		t.Fatalf("bad from: %d", w.Code)
+	}
+	if w := e.raw("", "GET", "/console/api/v1/spend/requests", nil); w.Code != 401 {
+		t.Fatalf("anonymous: %d", w.Code)
 	}
 }
 
@@ -118,6 +182,9 @@ func TestSettingsAndAudit_AdminOnly(t *testing.T) {
 	}](t, e.as("admin@x.io", "GET", "/console/api/v1/audit?action=settings.update", nil))
 	if a.Total != 1 {
 		t.Fatalf("audit total=%d", a.Total)
+	}
+	if w := e.as("admin@x.io", "GET", "/console/api/v1/audit?limit=500&offset=-1", nil); w.Code != 200 {
+		t.Fatalf("out-of-range paging: %d %s", w.Code, w.Body)
 	}
 	if w := e.as("member@x.io", "GET", "/console/api/v1/audit", nil); w.Code != 403 {
 		t.Fatalf("member audit: %d", w.Code)
