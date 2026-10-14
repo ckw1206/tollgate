@@ -26,13 +26,13 @@ export default function Access() {
   const save = async (g: Group, list: string[], undo: boolean) => {
     setBusy(true)
     setError('')
+    setToast(null) // any save supersedes the last Undo, so it can't race this PUT
     try {
       const { affected_keys: n } = await api<Affected<Group>>(`/console/api/v1/groups/${g.id}`, {
         method: 'PUT',
         body: { name: g.name, budget_type: g.budget_type, budget_nanos: g.budget_nanos, rpm_limit: g.rpm_limit, tpm_limit: g.tpm_limit, models: list },
       })
-      if (undo) setToast(null)
-      else {
+      if (!undo) {
         const keys = n > 0 ? ` ${n} ${n === 1 ? 'key lists' : 'keys list'} models it no longer allows.` : ''
         setToast({ id: Date.now(), text: `Saved "${g.name}".${keys}`, undo: () => save(g, g.models, true) })
       }
