@@ -79,8 +79,10 @@ func TestUsers_AdminCannotLockThemselvesOut(t *testing.T) {
 	if w := e.as("admin@x.io", "PUT", "/console/api/v1/users/"+e.admin.ID, map[string]any{"role": "member"}); w.Code != 400 {
 		t.Fatalf("self-demote: %d", w.Code)
 	}
-	if w := e.as("admin@x.io", "DELETE", "/console/api/v1/users/"+e.admin.ID, nil); w.Code != 400 {
-		t.Fatalf("self-disable: %d", w.Code)
+	for _, id := range []string{e.admin.ID, strings.ToUpper(e.admin.ID)} {
+		if w := e.as("admin@x.io", "DELETE", "/console/api/v1/users/"+id, nil); w.Code != 400 {
+			t.Fatalf("self-disable %s: %d", id, w.Code)
+		}
 	}
 	if w := e.as("admin@x.io", "PUT", "/console/api/v1/users/"+e.member.ID, map[string]any{"role": "viewer"}); w.Code != 200 {
 		t.Fatalf("demote other: %d %s", w.Code, w.Body)

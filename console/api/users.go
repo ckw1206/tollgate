@@ -68,12 +68,17 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 // spend history stays attributable.
 func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == auth.UserFrom(r.Context()).ID {
+	u, err := s.Store.GetUser(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	if u.ID == auth.UserFrom(r.Context()).ID { // canonical, like updateUser
 		badRequest(w, "you can't disable yourself")
 		return
 	}
 	t := true
-	u, err := s.Store.UpdateUser(r.Context(), id, repo.UserUpdate{Disabled: &t})
+	u, err = s.Store.UpdateUser(r.Context(), id, repo.UserUpdate{Disabled: &t})
 	if err != nil {
 		storeErr(w, err)
 		return
