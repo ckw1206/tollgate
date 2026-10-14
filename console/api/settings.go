@@ -2,11 +2,17 @@ package consoleapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"tollgate/core/api"
@@ -47,6 +53,25 @@ func validIcon(s string) bool {
 	return false
 }
 
+// validWebhookURL accepts "" (disabled) or an http/https URL with a host.
+func validWebhookURL(s string) bool {
+	if s == "" {
+		return true
+	}
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// validWebhookURLStrict is validWebhookURL with no "" exception: the test-event
+// endpoint needs an actual destination, so an empty/invalid value is a 400 there.
+func validWebhookURLStrict(s string) bool {
+	if s == "" {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Store.GetSettings(r.Context())
 	if err != nil {
@@ -73,6 +98,10 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "landing_headline is limited to 80 characters and landing_tagline to 160")
 		return
 	}
+	if !validWebhookURL(in.BudgetWebhookURL) {
+		badRequest(w, "budget_webhook_url must be empty or an http(s) URL with a host")
+		return
+	}
 	before, _ := s.Store.GetSettings(r.Context())
 	after, err := s.Store.UpdateSettings(r.Context(), in)
 	if err != nil {
@@ -92,4 +121,82 @@ func auditSettings(st *repo.Settings) *repo.Settings {
 	c := *st
 	c.ServerIcon = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(st.ServerIcon)))[:19]
 	return &c
+}
+
+// webhookTestTimeout bounds the test event; a var so tests can shorten it.
+var webhookTestTimeout = 5 * time.Second
+
+// testWebhook fires a single synthetic budget crossing at the configured URL and
+// reports the HTTP outcome synchronously. It is a one-shot probe for the console
+// "Test" button — it does NOT go through the async sender (which is fire-and-forget
+// and can't report back). Gated on SettingsWrite.
+func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
+	st, err := s.Store.GetSettings(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	u := st.BudgetWebhookURL
+	if !validWebhookURLStrict(u) {
+		badRequest(w, "set a valid budget_webhook_url (http/https with a host) first")
+		return
+	}
+	crossing := repo.BudgetCrossing{
+		Scope:       "key",
+		ID:          "00000000-0000-4000-8000-000000000000",
+		Label:       "test",
+		Threshold:   80,
+		SpendNanos:  0,
+		BudgetNanos: 0,
+		BudgetType:  "daily",
+	}
+	body, err := json.Marshal(crossing)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), webhookTestTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		badRequest(w, "invalid webhook URL")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	// A dedicated client that doesn't follow redirects: the test reaches only the
+	// validated URL, never a redirect target.
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Do(req)
+	if err != nil {
+		// A delivery failure (connection error or timeout) is a 5xx: the webhook is
+		// down or unreachable. status 0 means no upstream response was received.
+		msg := redactErr(err)
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			msg = fmt.Sprintf("timed out after %s", webhookTestTimeout)
+		}
+		api.WriteJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "status": 0, "message": msg})
+		return
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		api.WriteJSON(w, 200, map[string]any{"ok": true, "status": resp.StatusCode, "message": ""})
+		return
+	}
+	// The endpoint answered but rejected the event: 5xx-style, with the upstream
+	// status so the console can show it.
+	api.WriteJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "status": resp.StatusCode, "message": "endpoint returned " + resp.Status})
+}
+
+// redactErr strips a request URL from an error string before echoing it, so a
+// URL with an embedded credential (user:pass@host) can't leak into the response.
+func redactErr(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "http://"); i >= 0 {
+		msg = msg[:i] + "[url redacted]"
+	}
+	if i := strings.Index(msg, "https://"); i >= 0 {
+		msg = msg[:i] + "[url redacted]"
+	}
+	return msg
 }

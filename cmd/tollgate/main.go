@@ -26,6 +26,7 @@ import (
 	"tollgate/core/llm/providers"
 	"tollgate/core/spend"
 	"tollgate/core/vault"
+	"tollgate/core/webhook"
 	"tollgate/core/worker"
 	"tollgate/web"
 )
@@ -111,6 +112,14 @@ func serve() error {
 	recCtx, recCancel := context.WithCancel(context.Background())
 	defer recCancel() // cancel after HTTP drains, so no handler records into a stopped recorder
 	go rec.Run(recCtx)
+
+	// Budget-crossing webhook (#24). The sender is the last hop in the spend path:
+	// Submit never blocks, every delivery failure is logged and dropped. The client
+	// carries its own timeout on top of the sender's per-attempt timeout.
+	webhookClient := &http.Client{Timeout: 5 * time.Second}
+	ws := webhook.NewSender(store, webhookClient)
+	go ws.Run(ctx)
+	rec.OnCrossing = func(c repo.BudgetCrossing) { ws.Submit(recCtx, c) }
 
 	worker.Every(ctx, "budget_reset", time.Minute, func(ctx context.Context) error {
 		_, err := store.ResetBudgets(ctx)
