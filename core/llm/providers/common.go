@@ -16,6 +16,11 @@ func post(ctx context.Context, c *http.Client, url string, headers map[string]st
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Upstreams close idle keep-alive connections early (uvicorn: 5s) while Go keeps them 90s,
+	// so a POST on a reused, already-closed connection fails with EOF. Marking the request
+	// idempotent lets the Transport retry it on a fresh connection; an empty value is never
+	// sent on the wire. A retry happens only before any response byte, so nothing reached the client.
+	req.Header["X-Idempotency-Key"] = []string{}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
