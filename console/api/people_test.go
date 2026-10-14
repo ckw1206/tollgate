@@ -236,6 +236,45 @@ func TestUsers_ExtraModels(t *testing.T) {
 	}
 }
 
+// A model deleted (or renamed) after it was granted stays on the stored list; resending that
+// list with an unrelated change must still save, while a newly added unknown name is refused.
+func TestModelAccess_StoredStaleNamesDontBlockSave(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	accessModels(e)
+	group := "/console/api/v1/groups/" + e.group.ID
+	user := "/console/api/v1/users/" + e.member.ID
+	if w := e.as("admin@x.io", "PUT", group, map[string]any{"name": "default", "budget_type": "unlimited", "models": []string{"a", "b"}}); w.Code != 200 {
+		t.Fatalf("group: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("admin@x.io", "PUT", user, map[string]any{"extra_models": []string{"c"}}); w.Code != 200 {
+		t.Fatalf("user: %d %s", w.Code, w.Body)
+	}
+	ms, _ := e.store.ListModels(ctx)
+	for _, m := range ms {
+		if m.Name == "a" || m.Name == "c" {
+			if err := e.store.DeleteModel(ctx, m.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	w := e.as("admin@x.io", "PUT", group, map[string]any{"name": "default", "budget_type": "daily", "budget_nanos": 5, "models": []string{"a", "b"}})
+	if g := decodeInto[repo.Group](t, w); w.Code != 200 || !slices.Equal(g.Models, []string{"a", "b"}) || g.BudgetNanos != 5 {
+		t.Fatalf("group resave: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("admin@x.io", "PUT", user, map[string]any{"name": "M2", "extra_models": []string{"c"}}); w.Code != 200 {
+		t.Fatalf("user resave: %d %s", w.Code, w.Body)
+	}
+	for path, body := range map[string]map[string]any{
+		group: {"name": "default", "budget_type": "unlimited", "models": []string{"a", "ghost"}},
+		user:  {"extra_models": []string{"c", "ghost"}},
+	} {
+		if w := e.as("admin@x.io", "PUT", path, body); w.Code != 400 {
+			t.Fatalf("new unknown name on %s: %d", path, w.Code)
+		}
+	}
+}
+
 func TestUsers_CannotChangeOwnModelAccess(t *testing.T) {
 	e := newTenv(t)
 	accessModels(e)

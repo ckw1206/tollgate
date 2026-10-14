@@ -29,12 +29,12 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "role must be admin, member, or viewer")
 		return
 	}
-	if !s.knownModels(w, r, in.ExtraModels) {
-		return
-	}
 	before, err := s.Store.GetUser(r.Context(), id)
 	if err != nil {
 		storeErr(w, err)
+		return
+	}
+	if !s.knownModels(w, r, in.ExtraModels, before.ExtraModels) {
 		return
 	}
 	// Compare canonical IDs: Postgres also accepts the path id uppercase or without dashes.

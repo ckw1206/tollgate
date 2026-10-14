@@ -46,7 +46,9 @@ func validGroup(w http.ResponseWriter, in repo.GroupInput) bool {
 
 // knownModels dedupes a model access list in place and rejects names that aren't
 // in the models table. Disabled models count: they can be granted ahead of time.
-func (s *Server) knownModels(w http.ResponseWriter, r *http.Request, names *[]string) bool {
+// Names in kept (the stored list) pass too: a model renamed or deleted since stays
+// on the list until someone removes it, and doesn't block saving anything else.
+func (s *Server) knownModels(w http.ResponseWriter, r *http.Request, names *[]string, kept []string) bool {
 	if names == nil {
 		return true
 	}
@@ -57,7 +59,7 @@ func (s *Server) knownModels(w http.ResponseWriter, r *http.Request, names *[]st
 	}
 	out := []string{}
 	for _, n := range *names {
-		if !slices.ContainsFunc(ms, func(m repo.Model) bool { return m.Name == n }) {
+		if !slices.Contains(kept, n) && !slices.ContainsFunc(ms, func(m repo.Model) bool { return m.Name == n }) {
 			badRequest(w, fmt.Sprintf("unknown model %q", n))
 			return false
 		}
@@ -71,7 +73,7 @@ func (s *Server) knownModels(w http.ResponseWriter, r *http.Request, names *[]st
 
 func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 	var in repo.GroupInput
-	if !decode(w, r, &in) || !validGroup(w, in) || !s.knownModels(w, r, in.Models) {
+	if !decode(w, r, &in) || !validGroup(w, in) || !s.knownModels(w, r, in.Models, nil) {
 		return
 	}
 	g, err := s.Store.CreateGroup(r.Context(), in)
@@ -86,12 +88,15 @@ func (s *Server) createGroup(w http.ResponseWriter, r *http.Request) {
 func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in repo.GroupInput
-	if !decode(w, r, &in) || !validGroup(w, in) || !s.knownModels(w, r, in.Models) {
+	if !decode(w, r, &in) || !validGroup(w, in) {
 		return
 	}
 	before, err := s.Store.GetGroup(r.Context(), id)
 	if err != nil {
 		storeErr(w, err)
+		return
+	}
+	if !s.knownModels(w, r, in.Models, before.Models) {
 		return
 	}
 	after, err := s.Store.UpdateGroup(r.Context(), id, in)
