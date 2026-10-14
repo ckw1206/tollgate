@@ -82,12 +82,15 @@ func (s *Store) CreateGroup(ctx context.Context, in GroupInput) (*Group, error) 
 }
 
 // UpdateGroup replaces the editable fields, except that a nil Models keeps the list.
-// Changing budget_type restarts the window.
+// Changing budget_type restarts the window; changing budget_type or budget_nanos
+// re-arms the one-shot notify marker (A11).
 func (s *Store) UpdateGroup(ctx context.Context, id string, in GroupInput) (*Group, error) {
 	g, err := scanGroup(s.pool.QueryRow(ctx, `
 		UPDATE groups SET name=$2, budget_nanos=$4, rpm_limit=$5, tpm_limit=$6, models=COALESCE($7::text[], models), updated_at=now(),
 			spend_nanos     = CASE WHEN budget_type <> $3::budget_type THEN 0 ELSE spend_nanos END,
 			budget_reset_at = CASE WHEN budget_type <> $3::budget_type THEN next_budget_reset($3::budget_type) ELSE budget_reset_at END,
+			budget_notified_window = CASE WHEN budget_type <> $3::budget_type OR budget_nanos <> $4 THEN NULL ELSE budget_notified_window END,
+			budget_notified_pct    = CASE WHEN budget_type <> $3::budget_type OR budget_nanos <> $4 THEN 0 ELSE budget_notified_pct END,
 			budget_type=$3
 		WHERE id=$1 RETURNING `+groupCols,
 		id, in.Name, in.BudgetType, in.BudgetNanos, in.RPMLimit, in.TPMLimit, in.Models))
