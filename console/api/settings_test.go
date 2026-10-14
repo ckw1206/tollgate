@@ -2,10 +2,13 @@ package consoleapi
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -66,6 +69,27 @@ func setWebhookURL(t *testing.T, e *tenv, url string) {
 	t.Fatalf("could not set budget_webhook_url=%q after %d attempts: %s", url, maxAttempts, last)
 }
 
+// permitLoopback temporarily swaps the webhook test's public-host checks for a
+// loopback-permitting variant so httptest servers (127.0.0.1) can be probed; it
+// returns a restore func. The real guard's rejection behavior is covered
+// directly by TestWebhook_PublicHostGuard.
+func permitLoopback(t *testing.T) func() {
+	t.Helper()
+	oldHost, oldCtl := isPublicHostFn, webhookTestControl
+	isPublicHostFn = func(host string) bool {
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			return true // any IP literal is fine for the delivery cases
+		}
+		return host == "localhost"
+	}
+	webhookTestControl = func(network, address string, _ syscall.RawConn) error { return nil }
+	t.Cleanup(func() { isPublicHostFn, webhookTestControl = oldHost, oldCtl })
+	return func() { isPublicHostFn, webhookTestControl = oldHost, oldCtl }
+}
+
 func TestSettings_BudgetWebhookURL(t *testing.T) {
 	e := newTenv(t)
 
@@ -101,9 +125,54 @@ func TestSettings_BudgetWebhookURL(t *testing.T) {
 	}
 }
 
+// C1: /auth/me is returned to EVERY authenticated role, so it must not carry
+// the webhook URL (its path token may be the credential, or it may embed
+// user:pass@host). The full row — webhook URL included — is admin-only via
+// GET /console/api/v1/settings.
+func TestMe_SettingsNotLeaked(t *testing.T) {
+	e := newTenv(t)
+	const secret = "https://hooks.example.com/services/T0000/B0000/token-SECRET"
+	setWebhookURL(t, e, secret)
+
+	// Member and viewer: no usable budget_webhook_url in /auth/me.
+	for _, email := range []string{"member@x.io", "viewer@x.io"} {
+		type meServer struct {
+			ServerName       string `json:"server_name"`
+			BudgetWebhookURL string `json:"budget_webhook_url"`
+			Version          string `json:"version"`
+		}
+		me := decodeInto[struct {
+			User   repo.User `json:"user"`
+			Server meServer  `json:"server"`
+		}](t, e.as(email, "GET", "/auth/me", nil))
+		if me.Server.BudgetWebhookURL != "" {
+			t.Fatalf("%s /auth/me leaks budget_webhook_url: %q", email, me.Server.BudgetWebhookURL)
+		}
+		if me.Server.ServerName == "" || me.Server.Version == "" {
+			t.Fatalf("%s /auth/me server blob incomplete: %+v", email, me.Server)
+		}
+	}
+
+	// Non-admin GET settings is denied (the settings:read role test).
+	for _, email := range []string{"member@x.io", "viewer@x.io"} {
+		if w := e.as(email, "GET", "/console/api/v1/settings", nil); w.Code != http.StatusForbidden {
+			t.Fatalf("%s GET settings: %d %s", email, w.Code, w.Body)
+		}
+	}
+
+	// Admin GET settings returns the full row, webhook URL included.
+	if got := decodeInto[repo.Settings](t, e.as("admin@x.io", "GET", "/console/api/v1/settings", nil)); got.BudgetWebhookURL != secret {
+		t.Fatalf("admin GET settings: %q", got.BudgetWebhookURL)
+	}
+}
+
+// Contract for stream D: the response is ALWAYS 200 with
+// {"ok":bool,"status":int,"message":string} except 400 (no valid URL) / 403
+// (RBAC) / 405 / 415 in the standard error shape.
 func TestSettings_WebhookTestEvent(t *testing.T) {
 	e := newTenv(t)
 	const path = "/console/api/v1/settings/webhook/test"
+	permitLoopback(t)
 
 	// Member lacks settings:write → 403.
 	if w := e.as("member@x.io", "POST", path, nil); w.Code != http.StatusForbidden {
@@ -113,17 +182,20 @@ func TestSettings_WebhookTestEvent(t *testing.T) {
 	if w := e.as("viewer@x.io", "POST", path, nil); w.Code != http.StatusForbidden {
 		t.Fatalf("viewer test: %d %s", w.Code, w.Body)
 	}
-	// Admin, no URL configured → 400 (nothing to deliver to).
+	// Admin, no URL saved → 400 (nothing to deliver to).
 	if w := e.as("admin@x.io", "POST", path, nil); w.Code != http.StatusBadRequest {
 		t.Fatalf("admin no-url: %d %s", w.Code, w.Body)
 	}
 
+	// SSRF: a body URL on a non-public host is a 400 — covered with the REAL
+	// guard in TestWebhook_SSRFRejected (permitLoopback above would allow it).
+
 	// Each delivery case sets + verifies its own target URL immediately before the
 	// POST, so it never relies on a prior case's state (the settings row is shared).
 
-	// A reachable 2xx endpoint → 200 ok, and the probe carries the no-secret payload.
-	// gotBody is written by the httptest handler (its own goroutine) and read here,
-	// so a mutex orders the two.
+	// A reachable 2xx endpoint → 200 ok:true, and the probe carries the
+	// no-secret payload. gotBody is written by the httptest handler (its own
+	// goroutine) and read here, so a mutex orders the two.
 	var (
 		bodyMu  sync.Mutex
 		gotBody string
@@ -136,7 +208,7 @@ func TestSettings_WebhookTestEvent(t *testing.T) {
 	}))
 	defer up.Close()
 	setWebhookURL(t, e, up.URL)
-	wOk := e.as("admin@x.io", "POST", path, nil)
+	wOk := e.as("admin@x.io", "POST", path, nil) // empty body → the STORED url
 	if wOk.Code != http.StatusOK {
 		t.Fatalf("admin ok: %d %s", wOk.Code, wOk.Body)
 	}
@@ -152,30 +224,156 @@ func TestSettings_WebhookTestEvent(t *testing.T) {
 		}
 	}
 
-	// An upstream 5xx is reported as a delivery failure with a 5xx status.
-	// Each case gets its own response variable (assigned outside the if) so the
-	// body assertion below can't accidentally decode a prior case's response.
+	// C6: a body URL is tested INSTEAD of the stored one — the two fake
+	// endpoints below are distinct, so which one fired proves the routing.
+	up404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+	}))
+	defer up404.Close()
+	// Stored stays up (200); the body overrides with up404 (404). If the stored
+	// URL were hit instead, the probe would have gotten 200/ok:true.
+	w404 := e.as("admin@x.io", "POST", path, map[string]any{"url": up404.URL + "/nope"})
+	if w404.Code != http.StatusOK {
+		t.Fatalf("body-404 code: %d %s", w404.Code, w404.Body)
+	}
+	out404 := decodeInto[map[string]any](t, w404)
+	if out404["ok"] != false || out404["status"] != 404.0 {
+		t.Fatalf("body-404: %v", out404)
+	}
+	if msg, _ := out404["message"].(string); !strings.Contains(msg, "404") {
+		t.Fatalf("body-404 message: %q", msg)
+	}
+
+	// An invalid body URL is a 400 (not a delivery attempt).
+	if w := e.as("admin@x.io", "POST", path, map[string]any{"url": "ftp://x/hook"}); w.Code != http.StatusBadRequest {
+		t.Fatalf("body invalid: %d %s", w.Code, w.Body)
+	}
+
+	// An upstream 5xx is reported as 200 ok:false with the upstream status.
 	up500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 	}))
 	defer up500.Close()
 	setWebhookURL(t, e, up500.URL) // verified: the POST below is guaranteed to hit up500
 	w500 := e.as("admin@x.io", "POST", path, nil)
-	if w500.Code != http.StatusBadGateway {
+	if w500.Code != http.StatusOK {
 		t.Fatalf("admin 500: %d %s", w500.Code, w500.Body)
 	}
 	if out := decodeInto[map[string]any](t, w500); out["ok"] != false || out["status"] != 500.0 {
 		t.Fatalf("500: %v", out)
 	}
 
-	// An unreachable endpoint is a delivery failure (5xx, ok:false).
+	// An unreachable endpoint → 200 ok:false status:0, message keeps the cause
+	// (C10) — "connection refused" style, not "internal error".
 	setWebhookURL(t, e, "http://127.0.0.1:1/hook")
 	wUnreach := e.as("admin@x.io", "POST", path, nil)
-	if wUnreach.Code != http.StatusBadGateway {
+	if wUnreach.Code != http.StatusOK {
 		t.Fatalf("unreachable code: %d %s", wUnreach.Code, wUnreach.Body)
 	}
-	if out := decodeInto[map[string]any](t, wUnreach); out["ok"] != false {
-		t.Fatalf("unreachable: %v", out)
+	outU := decodeInto[map[string]any](t, wUnreach)
+	if outU["ok"] != false || outU["status"] != 0.0 {
+		t.Fatalf("unreachable: %v", outU)
+	}
+	if msg, _ := outU["message"].(string); msg == "" || strings.Contains(msg, "internal error") {
+		t.Fatalf("unreachable message: %q", msg)
+	}
+
+	// C10: a TLS failure surfaces the CAUSE (x509 …) with no host/path/token.
+	// The body URL points at the TLS test server (self-signed) while the stored
+	// URL is the plain 200 server, so this also proves body routing.
+	upTLS := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	}))
+	defer upTLS.Close()
+	setWebhookURL(t, e, up.URL) // verified: stored is the plain 200 server
+	wTLS := e.as("admin@x.io", "POST", path, map[string]any{"url": upTLS.URL + "/hook"})
+	if wTLS.Code != http.StatusOK {
+		t.Fatalf("tls code: %d %s", wTLS.Code, wTLS.Body)
+	}
+	outTLS := decodeInto[map[string]any](t, wTLS)
+	if outTLS["ok"] != false || outTLS["status"] != 0.0 {
+		t.Fatalf("tls: %v", outTLS)
+	}
+	msgTLS, _ := outTLS["message"].(string)
+	if !strings.Contains(msgTLS, "x509") {
+		t.Fatalf("tls message missing cause: %q", msgTLS)
+	}
+	for _, secret := range []string{"127.0.0.1", "/hook", "token"} {
+		if strings.Contains(msgTLS, secret) {
+			t.Fatalf("tls message leaks %q: %q", secret, msgTLS)
+		}
+	}
+}
+
+// C12: the pre-flight public-host check (the dialer's Control re-checks the
+// SAME function at connect time).
+func TestWebhook_PublicHostGuard(t *testing.T) {
+	rejected := []string{
+		"127.0.0.1", "127.0.0.1:8080", // loopback
+		"169.254.169.254", "169.254.169.254:80", // cloud metadata
+		"10.0.0.5", "192.168.1.10:8443", // RFC1918
+		"172.16.0.1", "127.1", // 172.16/12, shorthand loopback
+		"::1", "fc00::1", "fe80::1", // IPv6 loopback / ULA / link-local
+		"0.0.0.0", "::", // unspecified
+		"224.0.0.1", "ff02::1", // multicast
+		"nonexistent-host-tollgate-xyz.invalid", // unresolvable
+	}
+	for _, h := range rejected {
+		if isPublicHost(h) {
+			t.Fatalf("isPublicHost(%q) = true, want false", h)
+		}
+	}
+	public := []string{"8.8.8.8", "8.8.8.8:443", "93.184.216.34", "2001:4860:4860::8888"}
+	for _, h := range public {
+		if !isPublicHost(h) {
+			t.Fatalf("isPublicHost(%q) = false, want true", h)
+		}
+	}
+}
+
+// C12: rejected hosts get a 400 through the endpoint, and the dialer's Control
+// hook refuses the connection at dial time (defense in depth against DNS
+// rebinding — same function, second layer).
+func TestWebhook_SSRFRejected(t *testing.T) {
+	e := newTenv(t)
+	const path = "/console/api/v1/settings/webhook/test"
+	for _, url := range []string{"http://127.0.0.1:9/x", "http://169.254.169.254/latest", "http://10.0.0.5/hook", "http://[::1]/x"} {
+		if w := e.as("admin@x.io", "POST", path, map[string]any{"url": url}); w.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d %s", url, w.Code, w.Body)
+		} else if !strings.Contains(w.Body.String(), "public") {
+			t.Fatalf("%s: message should say public: %s", url, w.Body)
+		}
+	}
+	// The dialer Control itself: public passes, private fails.
+	if err := webhookTestControl("tcp", "8.8.8.8:443", nil); err != nil {
+		t.Fatalf("control public: %v", err)
+	}
+	if err := webhookTestControl("tcp", "127.0.0.1:443", nil); err == nil {
+		t.Fatal("control loopback: expected error")
+	}
+	if err := webhookTestControl("tcp", "169.254.169.254:80", nil); err == nil {
+		t.Fatal("control metadata: expected error")
+	}
+}
+
+// C10: redactErr surfaces the CAUSE of a *url.Error — net/http already strips
+// the URL's password from the error it builds, so the cause is safe to surface
+// and the URL (with any token in the path) is not.
+func TestRedactErr_KeepsCause(t *testing.T) {
+	err := &url.Error{Op: "Post", URL: "https://user:supersecretpw@hooks.example.com/services/TOKEN/hook",
+		Err: fmt.Errorf("x509: certificate signed by unknown authority")}
+	msg := redactErr(err)
+	if !strings.Contains(msg, "x509") || !strings.Contains(msg, "signed by unknown authority") {
+		t.Fatalf("cause lost: %q", msg)
+	}
+	for _, leak := range []string{"hooks.example.com", "/services/", "TOKEN", "supersecretpw"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("leaks %q: %q", leak, msg)
+		}
+	}
+	// A non-url.Error passes through (nothing to redact).
+	if got := redactErr(fmt.Errorf("plain failure")); got != "plain failure" {
+		t.Fatalf("passthrough: %q", got)
 	}
 }
 
