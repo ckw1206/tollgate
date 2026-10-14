@@ -17,5 +17,9 @@ image:
 
 # DB-backed tests skip silently without TOLLGATE_TEST_DATABASE_URL; `make test` always sets it,
 # so a missing Postgres fails loudly. Start it with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+# -timeout 20m: the DB-backed packages (console/api, core/db/repo) build a fresh
+# schema + migrations + bcrypt-hashed users per test, serially, and under -race on
+# the 2-core CI runner console/api alone ran ~600s — past go test's 10m default.
+# 20m bounds the run without masking a real deadlock (which hangs regardless).
 test:
-	TOLLGATE_TEST_DATABASE_URL='$(TEST_DB)' go test -count=1 $(TESTFLAGS) ./...
+	TOLLGATE_TEST_DATABASE_URL='$(TEST_DB)' go test -count=1 -timeout 20m $(TESTFLAGS) ./...
