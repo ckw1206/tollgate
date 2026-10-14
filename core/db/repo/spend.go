@@ -39,7 +39,7 @@ type SpendLog struct {
 type SpendFilter struct {
 	UserID, GroupID, KeyID string
 	From, To               time.Time
-	GroupBy                string // day | model | key | user | model,day
+	GroupBy                string // hour | day | week | month | year | model | key | user | group | model,<granularity>
 }
 
 type SpendRow struct {
@@ -368,22 +368,56 @@ const spendWhere = `WHERE created_at >= $1 AND created_at < $2
 // spendDay buckets by calendar day in the server timezone.
 const spendDay = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM-DD')`
 
-var ErrGroupBy = errors.New("group_by must be day, model, key, user, or model,day")
+// spendHour buckets by hour in the server timezone (label: YYYY-MM-DDTHH, 24h).
+// HH24, not HH — Postgres 'HH' is a 12-hour clock and would wrap 17:05 to 05,
+// breaking both the C1 24-hour label and lexicographic sort order.
+const spendHour = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM-DD"T"HH24')`
+
+// spendWeek buckets by ISO week in the server timezone (label: IYYY-Www, e.g. 2026-W42).
+const spendWeek = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'IYYY-"W"IW')`
+
+// spendMonth buckets by month in the server timezone (label: YYYY-MM).
+const spendMonth = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM')`
+
+// spendYear buckets by year in the server timezone (label: YYYY).
+const spendYear = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY')`
+
+var ErrGroupBy = errors.New("group_by must be hour, day, week, month, year, model, key, user, group, or model,day")
 
 func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, error) {
 	bucket := map[string]string{
-		"day":       spendDay,
-		"model":     `model_name`,
-		"model,day": `model_name`,
-		"key":       `key_id::text`,
-		"user":      `user_id::text`,
+		"hour":        spendHour,
+		"day":         spendDay,
+		"week":        spendWeek,
+		"month":       spendMonth,
+		"year":        spendYear,
+		"model":       `model_name`,
+		"model,day":   `model_name`,
+		"model,hour":  `model_name`,
+		"model,week":  `model_name`,
+		"model,month": `model_name`,
+		"model,year":  `model_name`,
+		"key":         `key_id::text`,
+		"user":        `user_id::text`,
+		"group":       `group_id::text`,
 	}[f.GroupBy]
 	if bucket == "" {
 		return nil, ErrGroupBy
 	}
+	// model,<granularity> pairs the model (Bucket) with a time sub-bucket (Day);
+	// the label format follows the granularity — the same mechanism as model,day.
 	day := `''`
-	if f.GroupBy == "model,day" {
+	switch f.GroupBy {
+	case "model,day":
 		day = spendDay
+	case "model,hour":
+		day = spendHour
+	case "model,week":
+		day = spendWeek
+	case "model,month":
+		day = spendMonth
+	case "model,year":
+		day = spendYear
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT `+bucket+` AS b, `+day+` AS d, count(*), sum(input_tokens + cache_read_tokens + cache_write_tokens), sum(output_tokens), sum(cost_nanos)

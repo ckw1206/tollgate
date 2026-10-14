@@ -133,7 +133,7 @@ func TestQuerySpend_ModelDayInServerTimezone(t *testing.T) {
 			t.Fatalf("row %d = %+v, want %+v", i, rows[i], want[i])
 		}
 	}
-	if _, err := f.s.QuerySpend(ctx, repo.SpendFilter{GroupBy: "week"}); err != repo.ErrGroupBy {
+	if _, err := f.s.QuerySpend(ctx, repo.SpendFilter{GroupBy: "hourly"}); err != repo.ErrGroupBy {
 		t.Fatalf("bad group_by: %v", err)
 	}
 }
