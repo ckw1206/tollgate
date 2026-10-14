@@ -122,6 +122,22 @@ func TestSafeTransport_RefusesCGNATDial(t *testing.T) {
 	}
 }
 
+// TestSafeTransport_HasNoProxy: SafeTransport clones http.DefaultTransport,
+// whose Proxy is http.ProxyFromEnvironment. Left in place, HTTP(S)_PROXY would
+// make the dialer connect to the PROXY instead of the webhook host: an
+// internal proxy (the usual case) gets refused by Control and every webhook
+// fails; a public proxy means Control only ever sees the proxy address and the
+// real destination is never checked. The internal-address check must see the
+// real destination, so the transport must use no proxy at all.
+//
+// The field is asserted directly — setting real proxy env vars in a test would
+// leak across parallel tests.
+func TestSafeTransport_HasNoProxy(t *testing.T) {
+	if tr := SafeTransport(); tr.Proxy != nil {
+		t.Error("SafeTransport().Proxy is non-nil, want nil (proxy env vars must not break or bypass the internal-address check)")
+	}
+}
+
 // TestIsPublicHost: the pre-flight check used by the console "Test" endpoint
 // must agree with Control on every range — same allowedIP, second layer (the
 // dialer still re-checks at connect time against DNS rebinding).

@@ -123,5 +123,12 @@ func SafeTransport() *http.Transport {
 	d := &net.Dialer{Control: Control}
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.DialContext = d.DialContext
+	// The default transport uses http.ProxyFromEnvironment. With HTTP(S)_PROXY
+	// set, the dialer would connect to the proxy instead of the webhook host —
+	// an internal proxy (the usual case) gets refused by Control and every
+	// webhook fails, and a public proxy means Control only ever sees the proxy
+	// address, never the real destination. The internal-address check must see
+	// the real destination, so no proxy is used.
+	tr.Proxy = nil
 	return tr
 }

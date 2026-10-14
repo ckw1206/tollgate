@@ -34,6 +34,12 @@ import (
 // Set at build time: -ldflags "-X main.version=v1.2.3 -X main.commit=<sha>".
 var version, commit = "dev", ""
 
+// webhookDrainCap bounds the shutdown wait for the budget-webhook sender:
+// delivery is best-effort, so after this much the sender's context is
+// cancelled (in-flight request aborted, queue dropped) rather than drain a
+// full queue against a dead endpoint (~1h at 256 × 3 retries × 5s).
+const webhookDrainCap = 10 * time.Second
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 	var err error
@@ -173,8 +179,18 @@ func serve() error {
 	// The sender outlives the recorder: crossings from the final flush were
 	// Submited after the signal, so the sender runs on its own context and is
 	// shut down only after the recorder's Done, draining them before exit.
+	// Drain is best-effort: cap the wait, then cancel the sender's context so
+	// the in-flight request is aborted and the rest of the queue is dropped —
+	// a dead endpoint must not hold a deploy (an hour per full queue) waiting
+	// on a notification nobody bills against.
 	ws.Close()
-	<-ws.Done()
+	select {
+	case <-ws.Done():
+	case <-time.After(webhookDrainCap):
+		slog.Warn("webhook drain timed out; dropping queued crossings")
+		wsCancel()
+		<-ws.Done()
+	}
 	return nil
 }
 

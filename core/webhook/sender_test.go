@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -429,6 +430,69 @@ func TestSender_SubmitAfterCloseNoPanic(t *testing.T) {
 	}
 	s2.Submit(context.Background(), crossing()) // after drain: dropped, no panic
 	s2.Close()
+}
+
+// TestSender_CancelMidDrainReturnsPromptly: the shutdown cap in main.go relies
+// on Run returning promptly when its ctx is cancelled MID-DRAIN: the in-flight
+// client.Do must be aborted (its request context derives from the sender's
+// ctx) and the remaining queue dropped without blocking. With a long
+// per-attempt timeout a full drain against this endpoint would take
+// queued x maxAttempts x sendTimeout (450s), so returning in well under that
+// can only mean the cancel aborted the in-flight request. The endpoint accepts
+// and never responds, so the first request is genuinely in progress at cancel
+// time.
+func TestSender_CancelMidDrainReturnsPromptly(t *testing.T) {
+	origTimeout, origBackoff := sendTimeout, retryBackoff
+	sendTimeout, retryBackoff = 30*time.Second, time.Millisecond
+	defer func() { sendTimeout, retryBackoff = origTimeout, origBackoff }()
+
+	var hits atomic.Int32
+	// A raw listener that accepts and then holds the connection open without
+	// ever responding — simpler than an HTTP server here, because an HTTP
+	// handler blocked on request-body reads stays alive on a half-closed
+	// connection (its context is not cancelled by client-side abort) and
+	// would block listener close at the end of the test.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			hits.Add(1)
+			// Never read, never respond: the request stays in flight
+			// until the test closes the listener, dropping the connection.
+			_ = conn
+		}
+	}()
+
+	const queued = 5
+	ctx, cancel := context.WithCancel(context.Background())
+	s := newTestSender("http://"+l.Addr().String(), http.DefaultClient)
+	go s.Run(ctx)
+	for i := 0; i < queued; i++ {
+		s.Submit(ctx, crossing())
+	}
+	// The first delivery must be genuinely in flight before we cancel.
+	if !waitFor(t, 3*time.Second, func() bool { return hits.Load() >= 1 }) {
+		t.Fatal("no in-flight request reached the endpoint before cancel")
+	}
+	cancel()
+	select {
+	case <-s.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly after ctx cancel mid-drain (in-flight request not aborted?)")
+	}
+	// After the cancel: Submits must still drop silently (never panic) and
+	// Close after cancel must be a no-op, not a panic.
+	for i := 0; i < queued; i++ {
+		s.Submit(context.Background(), crossing())
+	}
+	s.Close()
 }
 
 // TestSender_SubmitRacesClose: Submit and Close from separate goroutines must
