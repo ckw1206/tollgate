@@ -22,8 +22,8 @@ Over plain `http` on anything other than `localhost` (and in Safari even on loca
 
 Then, as admin:
 
-1. **Credentials**: pick the provider, check the API endpoint (prefilled with the provider default; point it at any OpenAI-compatible server), and add its API key, or a GCP service-account JSON for Vertex. **Test connection** lists the upstream's models without saving.
-2. **Models**: add a model. Give it the name clients will send, the provider's model ID, the credential (its endpoint is used unless the model sets its own API base), and prices in USD per 1M tokens.
+1. **Models → Credentials**: pick the provider, check the API endpoint (prefilled with the provider default; point it at any OpenAI-compatible server), and add its API key, or a GCP service-account JSON for Vertex. **Test connection** lists the upstream's models without saving.
+2. **Models**: add a model. Give it the name clients will send, the provider's model ID, the credential (it sets the provider and endpoint; for a keyless OpenAI-compatible server pick None and enter its API base), and prices in USD per 1M tokens.
 3. **API keys**: create a key and copy it.
 
 ```bash

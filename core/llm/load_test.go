@@ -40,20 +40,25 @@ func TestLoadModels_DecryptsAndSkipsDisabled(t *testing.T) {
 	}
 }
 
-// Endpoint resolution: model.api_base ▸ credential.api_base ▸ provider default ("" here).
-func TestLoadModels_EndpointFromModelThenCredential(t *testing.T) {
+// Endpoint resolution: credential.api_base ▸ provider default ("" here); the model's own
+// api_base counts without a credential, or (legacy) when its credential has none.
+func TestLoadModels_EndpointFromCredential(t *testing.T) {
 	s := repo.New(dbtest.New(t))
 	ctx := context.Background()
 	v, _ := vault.New(bytes.Repeat([]byte{1}, 32))
 	nonce, ct, _ := v.Seal("vllm", []byte(""))
 	vllm, _ := s.CreateCredential(ctx, repo.CredentialInput{Name: "vllm", Kind: "api_key", Provider: "openai", APIBase: "http://10.0.0.5:8000/v1"}, nonce, ct)
+	nonce, ct, _ = v.Seal("plain", []byte("k"))
+	plain, _ := s.CreateCredential(ctx, repo.CredentialInput{Name: "plain", Kind: "api_key", Provider: "openai"}, nonce, ct)
 	nonce, ct, _ = v.Seal("vx", []byte(`{}`))
 	vx, _ := s.CreateCredential(ctx, repo.CredentialInput{Name: "vx", Kind: "gcp_service_account", Provider: "google",
 		VertexProject: "cred-proj", VertexLocation: "europe-west4"}, nonce, ct)
 	for _, in := range []repo.ModelInput{
 		{Name: "inherits", Provider: "openai", UpstreamModel: "m", CredentialID: &vllm.ID, Enabled: true},
 		{Name: "overrides", Provider: "openai", UpstreamModel: "m", CredentialID: &vllm.ID, APIBase: "https://own.example.com/v1", Enabled: true},
-		{Name: "no-cred", Provider: "openai", UpstreamModel: "m", Enabled: true},
+		{Name: "no-cred", Provider: "openai", UpstreamModel: "m", APIBase: "http://10.0.0.9:8000/v1", Enabled: true},
+		{Name: "default", Provider: "openai", UpstreamModel: "m", CredentialID: &plain.ID, Enabled: true},
+		{Name: "legacy", Provider: "openai", UpstreamModel: "m", CredentialID: &plain.ID, APIBase: "https://proxy.example.com/v1", Enabled: true},
 		{Name: "vertex", Provider: "google", UpstreamModel: "g", CredentialID: &vx.ID, Enabled: true},
 		{Name: "vertex-own", Provider: "google", UpstreamModel: "g", CredentialID: &vx.ID, Enabled: true,
 			Extra: json.RawMessage(`{"vertex_project":"model-proj"}`)},
@@ -70,8 +75,11 @@ func TestLoadModels_EndpointFromModelThenCredential(t *testing.T) {
 	for _, m := range ms {
 		got[m.Name] = m
 	}
-	if got["inherits"].APIBase != "http://10.0.0.5:8000/v1" || got["overrides"].APIBase != "https://own.example.com/v1" || got["no-cred"].APIBase != "" {
-		t.Fatalf("api_base: %q %q %q", got["inherits"].APIBase, got["overrides"].APIBase, got["no-cred"].APIBase)
+	for name, want := range map[string]string{"inherits": "http://10.0.0.5:8000/v1", "overrides": "http://10.0.0.5:8000/v1",
+		"no-cred": "http://10.0.0.9:8000/v1", "default": "", "legacy": "https://proxy.example.com/v1"} {
+		if got[name].APIBase != want {
+			t.Errorf("%s api_base: %q, want %q", name, got[name].APIBase, want)
+		}
 	}
 	if x := got["vertex"].Extra; x.VertexProject != "cred-proj" || x.VertexLocation != "europe-west4" {
 		t.Fatalf("vertex: %+v", x)

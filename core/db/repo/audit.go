@@ -37,9 +37,11 @@ func (s *Store) InsertAudit(ctx context.Context, e AuditEntry) error {
 
 // ListAudit returns newest first plus the total count matching the filter.
 func (s *Store) ListAudit(ctx context.Context, f AuditFilter) ([]AuditEntry, int, error) {
-	if f.Limit <= 0 || f.Limit > 200 {
+	// Limit defaults to 50 and is capped at 200; a negative offset reads from the start.
+	if f.Limit <= 0 {
 		f.Limit = 50
 	}
+	f.Limit, f.Offset = min(f.Limit, 200), max(f.Offset, 0)
 	where := `WHERE ($1 = '' OR actor_id::text = $1) AND ($2 = '' OR action LIKE $2 || '%')
 	            AND ($3::timestamptz IS NULL OR created_at >= $3) AND ($4::timestamptz IS NULL OR created_at < $4)`
 	args := []any{f.ActorID, f.Action, f.From, f.To}

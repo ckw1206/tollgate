@@ -271,6 +271,83 @@ func TestModels_FiltersByAllowList(t *testing.T) {
 	}
 }
 
+func TestModelAccess_GroupUnionExtrasThenKey(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	ctx := context.Background()
+	list := func(names ...string) *[]string { l := append([]string{}, names...); return &l }
+	setGroup := func(names ...string) {
+		if _, err := e.store.UpdateGroup(ctx, e.user.GroupID, repo.GroupInput{Name: "default", BudgetType: "unlimited", Models: list(names...)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setExtra := func(names ...string) {
+		if _, err := e.store.UpdateUser(ctx, e.user.ID, repo.UserUpdate{ExtraModels: list(names...)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chat := func(raw, model string) *httptest.ResponseRecorder {
+		return e.do("POST", "/v1/chat/completions", raw, `{"model":"`+model+`","messages":[{"role":"user","content":"hi"}]}`)
+	}
+	listed := func(raw string) (ids []string) {
+		var out struct{ Data []struct{ ID string } }
+		json.Unmarshal(e.do("GET", "/v1/models", raw, "").Body.Bytes(), &out)
+		for _, m := range out.Data {
+			ids = append(ids, m.ID)
+		}
+		return ids
+	}
+
+	// group [] = all, extras [] = none
+	if w := chat(e.raw, "fast"); w.Code != 200 || len(listed(e.raw)) != 2 {
+		t.Fatalf("all: %d %v", w.Code, listed(e.raw))
+	}
+	n := len(e.records)
+	setGroup("slow")
+	w := chat(e.raw, "fast")
+	if w.Code != 403 || errCode(t, w) != "model_not_allowed" || !strings.Contains(w.Body.String(), "its owner or the owner's group") {
+		t.Fatalf("group excludes fast: %d %s", w.Code, w.Body)
+	}
+	if w := e.do("POST", "/v1/embeddings", e.raw, `{"model":"fast","input":"hi"}`); w.Code != 403 || errCode(t, w) != "model_not_allowed" {
+		t.Fatalf("embeddings: %d %s", w.Code, w.Body)
+	}
+	if got := listed(e.raw); len(got) != 1 || got[0] != "slow" {
+		t.Fatalf("/v1/models: %v", got)
+	}
+	if len(e.records) != n {
+		t.Fatal("refused requests must not be recorded")
+	}
+	// an extra grant applies on the next request: the per-request lookup has no cache
+	setExtra("fast")
+	if w := chat(e.raw, "fast"); w.Code != 200 || len(listed(e.raw)) != 2 {
+		t.Fatalf("granted: %d %v", w.Code, listed(e.raw))
+	}
+
+	// a key narrows but can't widen
+	setExtra()
+	narrow, _, _ := e.store.CreateKey(ctx, e.user.ID, repo.KeyInput{Alias: "n", GroupID: e.user.GroupID, BudgetType: "unlimited", Models: []string{"fast"}})
+	if w := chat(narrow, "fast"); w.Code != 403 {
+		t.Fatalf("key widened past the group: %d", w.Code)
+	}
+	if w := chat(narrow, "slow"); w.Code != 403 || len(listed(narrow)) != 0 {
+		t.Fatalf("key narrowing: %d %v", w.Code, listed(narrow))
+	}
+
+	// unknown or disabled (not in the registry) stays 404, even when granted
+	setGroup("ghost")
+	setExtra("ghost")
+	if w := chat(e.raw, "ghost"); w.Code != 404 || errCode(t, w) != "model_not_found" || len(listed(e.raw)) != 0 {
+		t.Fatalf("disabled: %d %s %v", w.Code, w.Body, listed(e.raw))
+	}
+
+	// the owner's group governs, not the key's billing group
+	team, _ := e.store.CreateGroup(ctx, repo.GroupInput{Name: "team", BudgetType: "unlimited", Models: list("slow")})
+	setGroup()
+	e.store.UpdateUser(ctx, e.user.ID, repo.UserUpdate{GroupID: &team.ID})
+	if w := chat(e.raw, "fast"); w.Code != 403 {
+		t.Fatalf("billing group granted access: %d", w.Code)
+	}
+}
+
 func TestEmbeddings(t *testing.T) {
 	e := newEnv(t, repo.KeyInput{})
 	w := e.do("POST", "/v1/embeddings", e.raw, `{"model":"fast","input":"hi"}`)

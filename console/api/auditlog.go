@@ -10,7 +10,11 @@ import (
 
 func (s *Server) auditLog(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
+	// A given limit is clamped to [1,200] (the repo caps it); absent or malformed → the default 50.
+	limit, err := strconv.Atoi(q.Get("limit"))
+	if err == nil {
+		limit = max(limit, 1)
+	}
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	entries, total, err := s.Store.ListAudit(r.Context(), repo.AuditFilter{ActorID: q.Get("actor_id"), Action: q.Get("action"), Limit: limit, Offset: offset})
 	if err != nil {

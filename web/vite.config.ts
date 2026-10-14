@@ -12,6 +12,7 @@ export default defineConfig({
       '/auth': 'http://localhost:4000',
       '/console': 'http://localhost:4000',
       '/v1': 'http://localhost:4000',
+      '/health': 'http://localhost:4000',
     },
   },
 })

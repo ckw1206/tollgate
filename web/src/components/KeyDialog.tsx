@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react'
 import { api } from '../api'
-import type { ApiKey, Group, Model } from '../types'
+import { useAuth } from '../auth'
+import type { ApiKey, Group, Model, User } from '../types'
 import { LimitsFields, limitsPayload, limitsState, type LimitsState } from './LimitsFields'
 import { Button, ErrorText, Field, inputCls, Modal, ModalFooter, MultiSelect, useLoad } from './ui'
 
@@ -35,8 +36,17 @@ export default function KeyDialog({ apiKey, groups, canBillingGroup, onClose, on
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const modelsLabel = useId()
+  const { me, can } = useAuth()
   const models = useLoad<Model[]>('/console/api/v1/models')
-  const enabled = (models.data ?? []).filter((m) => m.enabled).sort((a, b) => a.name.localeCompare(b.name))
+  // Options = the owner's effective set. Without models:write GET /models is already that;
+  // writers get every model, so narrow to the owner's group ∪ extra grants (as repo.Access).
+  const writer = can('models:write')
+  const ownerId = apiKey === 'new' ? me!.user.id : apiKey.user_id
+  const users = useLoad<User[]>(writer && ownerId !== me!.user.id ? '/console/api/v1/users' : null)
+  const owner = ownerId === me!.user.id ? me!.user : users.data?.find((u) => u.id === ownerId)
+  const group = writer ? groups.find((g) => g.id === owner?.group_id) : undefined
+  const allowed = (n: string) => !group || !group.models.length || group.models.includes(n) || owner!.extra_models.includes(n)
+  const enabled = (models.data ?? []).filter((m) => m.enabled && allowed(m.name)).sort((a, b) => a.name.localeCompare(b.name))
   // Picks that are no longer enabled models (deleted, renamed or disabled). Unknown until loaded.
   const stale = models.data ? form.models.filter((n) => !enabled.some((m) => m.name === n)) : []
 
@@ -74,8 +84,10 @@ export default function KeyDialog({ apiKey, groups, canBillingGroup, onClose, on
             onChange={(v) => setForm({ ...form, models: v })}
             allLabel="All models"
             allHint={models.data ? `${enabled.length} enabled, incl. future ones` : undefined}
+            allSub="Includes models added later"
             staleIds={stale}
           />
+          {form.models.length === 0 && <span className="mt-1 block text-xs text-muted-foreground">Default. Models added later are allowed automatically.</span>}
           <ErrorText>{models.error}</ErrorText>
         </div>
         {canBillingGroup && (

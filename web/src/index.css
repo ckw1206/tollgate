@@ -37,7 +37,7 @@
   --font-sans: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --shadow-dialog: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-  --shadow-landing-card: 0 10px 30px -10px rgba(40, 48, 30, 0.25);
+  --shadow-landing-card: 0 10px 30px -10px rgba(40, 48, 30, 0.2);
 }
 
 /* Mira's light tokens are tuned for dark surfaces (near-white primary, translucent-white
@@ -77,9 +77,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Landing (/login, /setup, /invite): always light Mira over the illustrated backdrop. */
-.landing-bg {
+/* Landing (/welcome): always light Mira over the illustrated backdrop. Sign in, setup and
+   invite (/login, /setup, /invite) use the plain base colour. */
+.landing-bg,
+.auth-bg {
   background-color: #eceee6;
+}
+.landing-bg {
   background-image: url('/landing-bg.webp');
   background-size: cover;
   background-position: center bottom;

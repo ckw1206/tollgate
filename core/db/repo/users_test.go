@@ -105,8 +105,16 @@ func TestUpdateUser_Partial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Role != "viewer" || !got.Disabled || got.Name != "A" {
+	if got.Role != "viewer" || !got.Disabled || got.Name != "A" || got.ExtraModels == nil || len(got.ExtraModels) != 0 {
 		t.Fatalf("got %+v", got)
+	}
+	got, _ = s.UpdateUser(ctx, u.ID, repo.UserUpdate{ExtraModels: &[]string{"m"}})
+	got, _ = s.UpdateUser(ctx, u.ID, repo.UserUpdate{Role: &role}) // nil extra_models keeps the list
+	if len(got.ExtraModels) != 1 || got.ExtraModels[0] != "m" {
+		t.Fatalf("extra_models not kept: %+v", got)
+	}
+	if got, _ = s.UpdateUser(ctx, u.ID, repo.UserUpdate{ExtraModels: &[]string{}}); len(got.ExtraModels) != 0 {
+		t.Fatalf("[] should clear: %+v", got)
 	}
 	if _, err := s.GetUser(ctx, "00000000-0000-0000-0000-000000000000"); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)

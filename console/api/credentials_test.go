@@ -41,18 +41,33 @@ func TestCredentials_ProviderEndpointValidation(t *testing.T) {
 		}
 	}
 
-	// A model can't use a credential made for another provider, and its own api_base is validated too.
+	// A model can't use a credential made for another provider.
 	m := map[string]any{"name": "claude", "provider": "anthropic", "upstream_model": "x", "credential_id": c.ID}
 	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 400 || !strings.Contains(w.Body.String(), "is for openai") {
 		t.Fatalf("provider mismatch: %d %s", w.Code, w.Body)
 	}
-	m["provider"], m["api_base"] = "openai", "https://api.example.com/v1/"
-	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 400 {
+	// With a credential, the model's own api_base is dropped on create and update: the credential's endpoint wins.
+	m["provider"], m["api_base"] = "openai", "https://own.example.com/v1"
+	w = e.as("admin@x.io", "POST", "/console/api/v1/models", m)
+	created := decodeInto[repo.Model](t, w)
+	if w.Code != 201 || created.APIBase != "" {
+		t.Fatalf("create with credential: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("admin@x.io", "PUT", "/console/api/v1/models/"+created.ID, m); w.Code != 200 || decodeInto[repo.Model](t, w).APIBase != "" {
+		t.Fatalf("update with credential: %d %s", w.Code, w.Body)
+	}
+	// Without one, api_base is required and validated.
+	own := map[string]any{"name": "own", "provider": "openai", "upstream_model": "x"}
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", own); w.Code != 400 || !strings.Contains(w.Body.String(), "api_base is required") {
+		t.Fatalf("keyless without api_base: %d %s", w.Code, w.Body)
+	}
+	own["api_base"] = "https://api.example.com/v1/"
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", own); w.Code != 400 {
 		t.Fatalf("model trailing slash: %d", w.Code)
 	}
-	delete(m, "api_base")
-	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", m); w.Code != 201 {
-		t.Fatalf("model with blank api_base: %d %s", w.Code, w.Body)
+	own["api_base"] = "http://10.0.0.5:8000/v1"
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/models", own); w.Code != 201 || decodeInto[repo.Model](t, w).APIBase != "http://10.0.0.5:8000/v1" {
+		t.Fatalf("keyless with api_base: %d %s", w.Code, w.Body)
 	}
 }
 

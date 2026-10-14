@@ -2,6 +2,7 @@ package consoleapi
 
 import (
 	"net/http"
+	"slices"
 
 	"tollgate/console/auth"
 	"tollgate/console/rbac"
@@ -28,14 +29,22 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "role must be admin, member, or viewer")
 		return
 	}
-	me := auth.UserFrom(r.Context())
-	if id == me.ID && ((in.Role != nil && *in.Role != "admin") || (in.Disabled != nil && *in.Disabled)) {
-		badRequest(w, "you can't demote or disable yourself")
-		return
-	}
 	before, err := s.Store.GetUser(r.Context(), id)
 	if err != nil {
 		storeErr(w, err)
+		return
+	}
+	if !s.knownModels(w, r, in.ExtraModels, before.ExtraModels) {
+		return
+	}
+	// Compare canonical IDs: Postgres also accepts the path id uppercase or without dashes.
+	self := before.ID == auth.UserFrom(r.Context()).ID
+	if self && ((in.Role != nil && *in.Role != "admin") || (in.Disabled != nil && *in.Disabled)) {
+		badRequest(w, "you can't demote or disable yourself")
+		return
+	}
+	if self && ((in.GroupID != nil && *in.GroupID != before.GroupID) || (in.ExtraModels != nil && !slices.Equal(*in.ExtraModels, before.ExtraModels))) {
+		badRequest(w, "you can't change your own group or model access")
 		return
 	}
 	after, err := s.Store.UpdateUser(r.Context(), id, in)
@@ -44,19 +53,32 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "user.update", "users", id, before, after)
-	api.WriteJSON(w, 200, after)
+	n, err := s.Store.CountKeysOutsideAccess(r.Context(), "", after.ID)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, struct {
+		*repo.User
+		AffectedKeys int `json:"affected_keys"` // see updateGroup
+	}{after, n})
 }
 
 // disableUser is the DELETE route: users are disabled, never removed, so their
 // spend history stays attributable.
 func (s *Server) disableUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == auth.UserFrom(r.Context()).ID {
+	u, err := s.Store.GetUser(r.Context(), id)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	if u.ID == auth.UserFrom(r.Context()).ID { // canonical, like updateUser
 		badRequest(w, "you can't disable yourself")
 		return
 	}
 	t := true
-	u, err := s.Store.UpdateUser(r.Context(), id, repo.UserUpdate{Disabled: &t})
+	u, err = s.Store.UpdateUser(r.Context(), id, repo.UserUpdate{Disabled: &t})
 	if err != nil {
 		storeErr(w, err)
 		return
