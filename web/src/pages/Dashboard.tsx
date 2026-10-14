@@ -39,8 +39,9 @@ const storedShow = () => {
 }
 
 // Calendar days are YYYY-MM-DD in the server timezone, the same buckets as /spend?group_by=day.
-// Years before 2000 are rejected (see DayInput).
-const isDay = (s: string | null): s is string => !!s && /^2\d{3}-\d{2}-\d{2}$/.test(s)
+// Years before 2000 are rejected (see DayInput), and so are impossible days (a hand-edited ?from=).
+const isDay = (s: string | null): s is string =>
+  !!s && /^2\d{3}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s
 const dayIn = (t: number, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(t)
 const nextDay = (d: string) => new Date(Date.parse(d) + DAY).toISOString().slice(0, 10)
 const fmtDay = (d: string) => new Date(Date.parse(d)).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
@@ -60,18 +61,19 @@ function midnight(d: string, tz: string) {
 // span: what ?range= (and, for custom, ?from=&to=) means right now. Today starts at midnight in the
 // server timezone; N days is a rolling N×24h; custom runs from 00:00 on `from` to the end of `to`.
 function spanOf(range: Range, pFrom: string | null, pTo: string | null, tz: string) {
-  const now = Math.floor(Date.now() / 60_000) * 60_000 + 60_000 // the next whole minute: a stable URL
+  const t = Date.now()
+  const now = Math.floor(t / 60_000) * 60_000 + 60_000 // the next whole minute: a stable URL
+  const today = dayIn(t, tz) // from the real clock: in a day's last minute, now is already tomorrow
   const n = parseInt(range)
   let from = now - n * DAY
   let to = now
   let label = `Last ${n} days`
   let phrase = `in the last ${n} days`
   if (range === 'today') {
-    from = midnight(dayIn(now, tz), tz)
+    from = midnight(today, tz)
     label = 'Today'
     phrase = 'today'
   } else if (range === 'custom') {
-    const today = dayIn(now, tz)
     const upToToday = (d: string) => (d < today ? d : today) // no spend in the future; bounds the day list
     let a = upToToday(isDay(pFrom) ? pFrom : dayIn(now - 30 * DAY, tz))
     let b = upToToday(isDay(pTo) ? pTo : today)
