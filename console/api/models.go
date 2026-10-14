@@ -22,14 +22,33 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 	if ms == nil {
 		ms = []repo.Model{}
 	}
-	// extra.headers can carry upstream auth, and api_base/credential_id are
-	// deployment details: only people who can edit models see them.
-	if !rbac.Has(auth.UserFrom(r.Context()).Role, rbac.ModelsWrite) {
-		for i := range ms {
-			ms[i].Extra, ms[i].APIBase, ms[i].CredentialID = nil, "", nil
-		}
+	me := auth.UserFrom(r.Context())
+	if rbac.Has(me.Role, rbac.ModelsWrite) {
+		api.WriteJSON(w, 200, ms)
+		return
 	}
-	api.WriteJSON(w, 200, ms)
+	// Everyone else sees only the enabled models they may call, and why.
+	g, err := s.Store.GetGroup(r.Context(), me.GroupID)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	type view struct {
+		repo.Model
+		Access string `json:"access"` // "group" or "granted"
+	}
+	out := []view{}
+	for _, m := range ms {
+		a := repo.Access(g.Models, me.ExtraModels, m.Name)
+		if !m.Enabled || a == "" {
+			continue
+		}
+		// extra.headers can carry upstream auth, and api_base/credential_id are
+		// deployment details: only people who can edit models see them.
+		m.Extra, m.APIBase, m.CredentialID = nil, "", nil
+		out = append(out, view{m, a})
+	}
+	api.WriteJSON(w, 200, out)
 }
 
 // validModel also drops api_base from a model with a credential: the credential's endpoint

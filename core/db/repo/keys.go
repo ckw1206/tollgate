@@ -34,9 +34,11 @@ type KeyInput struct {
 
 type AuthInfo struct {
 	Key          APIKey
-	Group        Group
+	Group        Group // the key's billing group: budget, RPM, TPM
 	UserEmail    string
 	UserDisabled bool
+	GroupModels  []string // model access comes from the owner's group (users.group_id)
+	ExtraModels  []string
 }
 
 func GenerateKey() (raw, hash, prefix string) {
@@ -119,18 +121,33 @@ func (s *Store) RevokeKey(ctx context.Context, id string) error {
 }
 
 // AuthByKeyHash is the per-request lookup. One indexed query, no cache, so
-// revocations and user disables take effect on the next request.
+// revocations, user disables and model access changes take effect on the next request.
+// ponytail: this per-request join is the access-change invalidation; there is no cache to bust.
 func (s *Store) AuthByKeyHash(ctx context.Context, hash string) (*AuthInfo, error) {
 	var a AuthInfo
 	g := &a.Group
-	dest := append(keyDest(&a.Key), &a.UserEmail, &a.UserDisabled,
+	dest := append(keyDest(&a.Key), &a.UserEmail, &a.UserDisabled, &a.GroupModels, &a.ExtraModels,
 		&g.ID, &g.Name, &g.BudgetType, &g.BudgetNanos, &g.SpendNanos, &g.BudgetResetAt, &g.RPMLimit, &g.TPMLimit, &g.CreatedAt, &g.UpdatedAt)
 	err := s.pool.QueryRow(ctx, `
-		SELECT `+keyCols+`, u.email, u.disabled,
+		SELECT `+keyCols+`, u.email, u.disabled, ug.models, u.extra_models,
 			g.id, g.name, g.budget_type, g.budget_nanos, g.spend_nanos, g.budget_reset_at, g.rpm_limit, g.tpm_limit, g.created_at, g.updated_at
-		FROM api_keys k JOIN users u ON u.id = k.user_id JOIN groups g ON g.id = k.group_id
+		FROM api_keys k JOIN users u ON u.id = k.user_id JOIN groups g ON g.id = k.group_id JOIN groups ug ON ug.id = u.group_id
 		WHERE k.key_hash = $1`, hash).Scan(dest...)
 	return &a, notFound(err)
+}
+
+// CountKeysOutsideAccess counts live keys of enabled owners (in groupID, or userID;
+// "" = any) whose explicit models list holds an enabled model the owner can't use.
+// Key lists are never rewritten: the gateway refuses those models instead.
+func (s *Store) CountKeysOutsideAccess(ctx context.Context, groupID, userID string) (n int, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT count(*) FROM api_keys k JOIN users u ON u.id = k.user_id JOIN groups g ON g.id = u.group_id
+		WHERE ($1 = '' OR u.group_id::text = $1) AND ($2 = '' OR u.id::text = $2)
+			AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > now()) AND NOT u.disabled
+			AND cardinality(g.models) > 0
+			AND EXISTS (SELECT 1 FROM unnest(k.models) AS km(name) JOIN models m ON m.name = km.name AND m.enabled
+				WHERE km.name <> ALL(g.models) AND km.name <> ALL(u.extra_models))`, groupID, userID).Scan(&n)
+	return n, err
 }
 
 var ErrKeyNotRotatable = errors.New("key is revoked, expired, or already rotated")

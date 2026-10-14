@@ -3,6 +3,7 @@ package repo_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,19 @@ func TestCreateKey_AuthLookupAndRevoke(t *testing.T) {
 	}
 	if _, err := s.AuthByKeyHash(ctx, repo.HashToken("tg-nope")); !errors.Is(err, repo.ErrNotFound) {
 		t.Fatalf("unknown key: %v", err)
+	}
+}
+
+func TestAuthByKeyHash_ModelAccessFromOwnersGroup(t *testing.T) {
+	s, g := newStore(t)
+	ctx := context.Background()
+	team, _ := s.CreateGroup(ctx, repo.GroupInput{Name: "team", BudgetType: "unlimited", Models: &[]string{"a"}})
+	u, _ := s.CreateUser(ctx, "m@x.io", "M", "hunter22hunter22", "member", team.ID)
+	s.UpdateUser(ctx, u.ID, repo.UserUpdate{ExtraModels: &[]string{"b"}})
+	raw, _, _ := s.CreateKey(ctx, u.ID, repo.KeyInput{Alias: "k", GroupID: g.ID, BudgetType: "unlimited"}) // billed to default
+	info, err := s.AuthByKeyHash(ctx, repo.HashToken(raw))
+	if err != nil || info.Group.ID != g.ID || !slices.Equal(info.GroupModels, []string{"a"}) || !slices.Equal(info.ExtraModels, []string{"b"}) {
+		t.Fatalf("%+v %v", info, err)
 	}
 }
 

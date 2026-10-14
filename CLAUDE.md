@@ -29,7 +29,8 @@ A bare `go test ./...` without `TOLLGATE_TEST_DATABASE_URL` **skips** the DB-bac
 - Streaming usage must be exact. For OpenAI, inject `stream_options.include_usage` and strip the usage chunk if the client didn't ask for it. Anthropic usage comes from `message_start`/`message_delta`, Gemini from `usageMetadata`.
 - Use stdlib `http.ServeMux` method patterns (`"POST /v1/..."`). No router dependency.
 - The server enforces what the console hides: a UI-only restriction (e.g. "rotated keys can't be edited") needs a handler check and a test too.
-- `GET /console/api/v1/models` is readable by every role; anything secret-adjacent on a model (`extra`, `api_base`, `credential_id`) is redacted for callers without `models:write`.
+- `GET /console/api/v1/models` is readable by every role. Callers without `models:write` get only the enabled models they may call, each with `access` (`group` | `granted`), and anything secret-adjacent on a model (`extra`, `api_base`, `credential_id`) redacted.
+- Model access (`repo.Access`): the key owner's group (`users.group_id`, `groups.models` empty = all) ∪ `users.extra_models`, then `api_keys.models` narrows. The key's billing group only drives budget, RPM and TPM. Never rewrite key lists when access shrinks; the gateway refuses with 403 `model_not_allowed`.
 
 ## Web console (`web/`)
 

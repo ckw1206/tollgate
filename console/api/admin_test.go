@@ -8,10 +8,12 @@ import (
 	"image"
 	pngenc "image/png"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"tollgate/console/rbac"
 	"tollgate/core/db/repo"
 )
 
@@ -215,6 +217,92 @@ func TestModels_NonWritersDontSeeUpstreamDetails(t *testing.T) {
 		if strings.Contains(b, "upstream-secret") || strings.Contains(b, "corp.example.com") || !strings.Contains(b, `"name":"azure"`) {
 			t.Fatalf("%s sees upstream details: %s", who, b)
 		}
+	}
+}
+
+func TestModels_NonWritersSeeEffectiveSet(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	accessModels(e) // a, b enabled; c disabled
+	e.store.UpdateGroup(ctx, e.group.ID, repo.GroupInput{Name: "default", BudgetType: "unlimited", Models: &[]string{"a"}})
+	e.store.UpdateUser(ctx, e.member.ID, repo.UserUpdate{ExtraModels: &[]string{"a", "b", "c"}})
+	seen := func(who string) (out []string) {
+		w := e.as(who, "GET", "/console/api/v1/models", nil)
+		if strings.Contains(w.Body.String(), "corp.example.com") {
+			t.Fatalf("%s sees api_base: %s", who, w.Body)
+		}
+		for _, m := range decodeInto[[]struct{ Name, Access string }](t, w) {
+			out = append(out, m.Name+":"+m.Access)
+		}
+		return out
+	}
+	// "group" wins over "granted"; disabled models stay hidden even when granted
+	if got := seen("member@x.io"); !slices.Equal(got, []string{"a:group", "b:granted"}) {
+		t.Fatalf("member: %v", got)
+	}
+	if got := seen("viewer@x.io"); !slices.Equal(got, []string{"a:group"}) {
+		t.Fatalf("viewer: %v", got)
+	}
+	w := e.as("admin@x.io", "GET", "/console/api/v1/models", nil)
+	if b := w.Body.String(); len(decodeInto[[]repo.Model](t, w)) != 3 || strings.Contains(b, `"access"`) || !strings.Contains(b, "corp.example.com") {
+		t.Fatalf("admin: %s", b)
+	}
+}
+
+// TestRoutes_DeniedRoles: every permissioned console route refuses the roles
+// that lack its permission. Paths use the caller's own user and group, so this
+// also covers members granting themselves models or moving groups.
+func TestRoutes_DeniedRoles(t *testing.T) {
+	e := newTenv(t)
+	id := "00000000-0000-0000-0000-000000000000"
+	routes := []struct {
+		method, path string
+		perm         rbac.Permission
+	}{
+		{"GET", "/invites", rbac.InvitesRead},
+		{"POST", "/invites", rbac.InvitesWrite},
+		{"DELETE", "/invites/" + id, rbac.InvitesWrite},
+		{"GET", "/users", rbac.UsersRead},
+		{"PUT", "/users/" + e.member.ID, rbac.UsersWrite},
+		{"PUT", "/users/" + e.viewer.ID, rbac.UsersWrite},
+		{"DELETE", "/users/" + e.admin.ID, rbac.UsersWrite},
+		{"GET", "/groups", rbac.GroupsReadOwn},
+		{"POST", "/groups", rbac.GroupsWrite},
+		{"PUT", "/groups/" + e.group.ID, rbac.GroupsWrite},
+		{"GET", "/keys", rbac.KeysReadOwn},
+		{"POST", "/keys", rbac.KeysWriteOwn},
+		{"PUT", "/keys/" + id, rbac.KeysWriteOwn},
+		{"DELETE", "/keys/" + id, rbac.KeysWriteOwn},
+		{"POST", "/keys/" + id + "/rotate", rbac.KeysWriteOwn},
+		{"GET", "/credentials", rbac.ModelsWrite},
+		{"POST", "/credentials", rbac.ModelsWrite},
+		{"PUT", "/credentials/" + id, rbac.ModelsWrite},
+		{"DELETE", "/credentials/" + id, rbac.ModelsWrite},
+		{"POST", "/credentials/test", rbac.ModelsWrite},
+		{"GET", "/models", rbac.ModelsRead},
+		{"POST", "/models", rbac.ModelsWrite},
+		{"PUT", "/models/" + id, rbac.ModelsWrite},
+		{"DELETE", "/models/" + id, rbac.ModelsWrite},
+		{"GET", "/spend", rbac.SpendReadOwn},
+		{"GET", "/audit", rbac.AuditRead},
+		{"GET", "/settings", rbac.SettingsRead},
+		{"PUT", "/settings", rbac.SettingsWrite},
+	}
+	body := map[string]any{"name": "default", "budget_type": "unlimited", "models": []string{}, "extra_models": []string{}, "group_id": e.group.ID}
+	denied := 0
+	for _, u := range []*repo.User{e.member, e.viewer} {
+		for _, rt := range routes {
+			if rbac.Has(u.Role, rt.perm) {
+				continue
+			}
+			denied++
+			if w := e.as(u.Email, rt.method, p+rt.path, body); w.Code != 403 {
+				t.Errorf("%s %s %s: %d, want 403", u.Role, rt.method, rt.path, w.Code)
+			}
+		}
+	}
+	if denied < 40 {
+		t.Fatalf("only %d denied cases; role permissions changed?", denied)
 	}
 }
 

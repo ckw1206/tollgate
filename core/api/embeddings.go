@@ -31,7 +31,7 @@ func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !modelAllowed(info, m.Name) {
-		WriteError(w, 403, "permission_error", "model_not_allowed", fmt.Sprintf("this key may not use model %q", m.Name))
+		WriteError(w, 403, "permission_error", "model_not_allowed", fmt.Sprintf("model %q isn't allowed for this key, its owner or the owner's group", m.Name))
 		return
 	}
 	if !s.admit(w, r, info) {
