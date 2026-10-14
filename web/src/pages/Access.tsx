@@ -15,32 +15,39 @@ export default function Access() {
   const users = useLoad<User[]>(can('users:read') ? '/console/api/v1/users' : null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [toast, setToast] = useState<{ id: number; text: string; undo: () => void } | null>(null)
+  const [toast, setToast] = useState<{ id: number; text: string; undo?: () => void } | null>(null)
   const [editing, setEditing] = useState<User | null>(null)
   const sorted = [...(models.data ?? [])].sort((a, b) => a.name.localeCompare(b.name))
   const names = sorted.map((m) => m.name) // every model, disabled included: they can be granted ahead of time
   const isAll = (g: Group) => g.models.length === 0
 
   // PUT /groups/{id} replaces the whole group: resend it as loaded, with the new list. Cells
-  // stay disabled until the reload lands, so the next click starts from the saved list.
+  // stay disabled until the reload lands, so the next click starts from the saved list; the
+  // Undo toast waits for it too, so Undo can't start a save while this one is still busy.
   const save = async (g: Group, list: string[], undo: boolean) => {
     setBusy(true)
     setError('')
     setToast(null) // any save supersedes the last Undo, so it can't race this PUT
+    let next: typeof toast = null
     try {
       const { affected_keys: n } = await api<Affected<Group>>(`/console/api/v1/groups/${g.id}`, {
         method: 'PUT',
         body: { name: g.name, budget_type: g.budget_type, budget_nanos: g.budget_nanos, rpm_limit: g.rpm_limit, tpm_limit: g.tpm_limit, models: list },
       })
+      // Undo restores the list as toggle saw it: names of deleted models are gone from the saved
+      // list, and the server only keeps unknown names that are still stored. A list of nothing
+      // but such names has no undo: [] would mean All.
+      const prev = g.models.filter((m) => names.includes(m))
       if (!undo) {
         const keys = n > 0 ? ` ${n} ${n === 1 ? 'key lists' : 'keys list'} models it no longer allows.` : ''
-        setToast({ id: Date.now(), text: `Saved "${g.name}".${keys}`, undo: () => save(g, g.models, true) })
+        next = { id: Date.now(), text: `Saved "${g.name}".${keys}`, undo: prev.length || isAll(g) ? () => save(g, prev, true) : undefined }
       }
     } catch (err) {
       setError((err as Error).message)
     }
     await groups.reload()
     setBusy(false)
+    setToast(next)
   }
 
   // Unticking All keeps just the first model; unticking a model on an All row keeps every
@@ -141,7 +148,7 @@ export default function Access() {
         />
       )}
       {toast && (
-        <Toast key={toast.id} action="Undo" onAction={toast.undo} onClose={() => setToast(null)}>
+        <Toast key={toast.id} action={toast.undo && 'Undo'} onAction={toast.undo} onClose={() => setToast(null)}>
           {toast.text}
         </Toast>
       )}
