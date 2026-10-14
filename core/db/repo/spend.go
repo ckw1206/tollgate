@@ -154,8 +154,19 @@ func (s *Store) detectCrossings(ctx context.Context, tx pgx.Tx, table, scope str
 			if thr <= 0 || effOld >= thr || effNew < thr {
 				continue
 			}
+			// The WHERE guard below stays as-is. pct is stored per-window: when
+			// this write re-arms a brand-new window (the stored window start
+			// differs from $2), reset pct to the current threshold $t so it
+			// starts fresh; within the same window keep the monotonic GREATEST
+			// so 80 then 100 still both fire and never regress. Without this,
+			// a chronically-maxed key stuck at pct 100 in window A would re-arm
+			// at 80% in window B but leave pct at 100, making the 100% guard
+			// (window IS DISTINCT FROM ws OR pct < 100) false — dropping the
+			// next window's 100% (#24).
 			tag, err := tx.Exec(ctx,
-				`UPDATE `+table+` SET budget_notified_window = $2, budget_notified_pct = GREATEST(budget_notified_pct, $3)
+				`UPDATE `+table+` SET budget_notified_window = $2, budget_notified_pct =
+					CASE WHEN budget_notified_window IS DISTINCT FROM $2 THEN $3
+						 ELSE GREATEST(budget_notified_pct, $3) END
 				 WHERE id = $1 AND (budget_notified_window IS DISTINCT FROM $2 OR budget_notified_pct < $3)`,
 				id, *ws, int16(t))
 			if err != nil {

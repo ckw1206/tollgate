@@ -299,6 +299,70 @@ func TestRecordSpend_CrossingFiresAgainAfterReset(t *testing.T) {
 	}
 }
 
+// have reports whether cx contains a crossing for the given scope at the
+// given threshold. Crossing order within a batch is not guaranteed, so the
+// tests assert membership rather than position.
+func have(cx []repo.BudgetCrossing, scope string, thr int) bool {
+	for _, c := range cx {
+		if c.Scope == scope && c.Threshold == thr {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRecordSpend_MaxedKeyRefiresBothThresholdsNextWindow guards the case the
+// "fires again after reset" test can't reach: a key that maxed out (100%) in a
+// window and does so again. Because budget_notified_pct is stored per-window
+// and only re-armed when the window start changes, a chronically-maxed key must
+// still fire BOTH 80% and 100% in the next window. Before the per-window pct
+// fix, the marker's pct was monotonic (GREATEST, never reset), so once it was
+// stuck at 100 the next window's 80% re-armed the window but left pct at 100,
+// and the 100% guard (window IS DISTINCT FROM ws OR pct < 100) evaluated false
+// — the 100% crossing was silently dropped.
+func TestRecordSpend_MaxedKeyRefiresBothThresholdsNextWindow(t *testing.T) {
+	f := newFixture(t, "daily") // budget_nanos = 1e9: 80% = 800M, 100% = 1000M
+	ctx := context.Background()
+	now := time.Now()
+
+	// Window A: 0 -> 1050M crosses BOTH 80% and 100% in a single batch. After
+	// this the notify marker holds wsA with pct 100 (the key is chronically
+	// maxed).
+	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) || !have(cx, "key", 100) {
+		t.Fatalf("window A: got %+v, want both 80 and 100 key crossings", cx)
+	}
+	wsA := crossingWindowStart(t, f)
+
+	// Advance the window to a DISTINCT start (simulate the midnight rollover)
+	// WITHOUT running ResetBudgets: the marker is not cleared, so it still says
+	// wsA at pct 100. This is exactly the setup where a monotonic pct would
+	// drop the next window's 100%.
+	forceWindowStart(t, f, now.AddDate(0, 0, -1)) // reset 1s ago: expired, wsB = 1 day before now
+	wsB := crossingWindowStart(t, f)
+	if wsB.Equal(wsA) {
+		t.Fatalf("forced wsB %v equals wsA %v; the re-fire below would be unproven", wsB, wsA)
+	}
+
+	// Window B: fresh in-window spend 0 -> 1050M must cross BOTH thresholds
+	// again. Before the fix the marker re-arms at 80% (window now wsB) but pct
+	// stays stuck at 100, so the 100% guard is false and the 100% crossing is
+	// silently dropped; after the per-window fix both fire.
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(1_050_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !have(cx, "key", 80) {
+		t.Fatalf("window B: got %+v, want the 80 key crossing to re-fire", cx)
+	}
+	if !have(cx, "key", 100) {
+		t.Fatalf("window B: got %+v, want the 100 key crossing to re-fire (a chronic 100%% must not suppress the next window's 100%%)", cx)
+	}
+}
+
 func TestRecordSpend_CrossingFiresInExpiredWindowBeforeReset(t *testing.T) {
 	f := newFixture(t, "daily")
 	ctx := context.Background()
