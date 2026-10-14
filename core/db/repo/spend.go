@@ -241,13 +241,15 @@ func idsFromSet(m map[string]bool) []string {
 }
 
 // ResetBudgets zeroes every daily/monthly window that's due and schedules the next one.
-// It also clears the one-shot notify marker on the resetting rows, so the new
-// window can report its first crossing fresh (per-window notify state, #24).
+// It does NOT touch the one-shot notify marker: the marker keys on the window start
+// (see detectCrossings), which advances by one period when the reset runs, so its
+// IS DISTINCT FROM guard re-arms naturally for the new window. Clearing the marker
+// here would open a double-notify: a late reset that zeroes spend and clears the
+// marker would let the same window's threshold fire a second time (#24).
 func (s *Store) ResetBudgets(ctx context.Context) (int64, error) {
 	var total int64
 	for _, table := range []string{"api_keys", "groups"} {
-		tag, err := s.pool.Exec(ctx, `UPDATE `+table+` SET spend_nanos = 0, budget_reset_at = next_budget_reset(budget_type),
-			budget_notified_window = NULL, budget_notified_pct = 0
+		tag, err := s.pool.Exec(ctx, `UPDATE `+table+` SET spend_nanos = 0, budget_reset_at = next_budget_reset(budget_type)
 			WHERE budget_type IN ('daily','monthly') AND budget_reset_at <= now()`)
 		if err != nil {
 			return total, err

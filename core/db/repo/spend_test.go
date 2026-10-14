@@ -178,6 +178,38 @@ func forceDue(t *testing.T, f fixture) {
 	}
 }
 
+// crossingWindowStart returns the fixture key's current window start, mirroring
+// WindowStart's rule: an active window starts one period before its reset
+// instant, an expired one (reset in the past) starts at the reset instant.
+func crossingWindowStart(t *testing.T, f fixture) time.Time {
+	t.Helper()
+	k, err := f.s.GetKey(context.Background(), f.k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k.BudgetResetAt == nil {
+		t.Fatal("budget_reset_at is nil")
+	}
+	if !time.Now().Before(*k.BudgetResetAt) {
+		return *k.BudgetResetAt // expired: the window began at the reset instant
+	}
+	if k.BudgetType == "monthly" {
+		return k.BudgetResetAt.AddDate(0, -1, 0)
+	}
+	return k.BudgetResetAt.AddDate(0, 0, -1) // daily
+}
+
+// forceWindowStart moves the fixture key's window to the one whose reset instant
+// is `at`, zeroing spend as the reset worker would. Pushing `at` into the past
+// makes WindowStart(now) return a DISTINCT window start, simulating a midnight
+// rollover that the unit test can't produce from the wall clock.
+func forceWindowStart(t *testing.T, f fixture, at time.Time) {
+	t.Helper()
+	if err := f.s.ExecForTest(context.Background(), `UPDATE api_keys SET spend_nanos = 0, budget_reset_at = $1 WHERE id = $2`, at, f.k.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRecordSpend_Crosses80OnceThen100Once(t *testing.T) {
 	f := newFixture(t, "daily") // budget_nanos = 1e9: 80% = 800M, 100% = 1000M
 	ctx := context.Background()
@@ -219,23 +251,51 @@ func TestRecordSpend_CrossingFiresAgainAfterReset(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
+	// Window A: 0 -> 900M crosses 80% once; the marker now holds wsA at pct 80.
 	cx, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
 	if err != nil || len(cx) != 1 || cx[0].Threshold != 80 {
-		t.Fatalf("setup: cx=%+v err=%v, want one 80 crossing", cx, err)
+		t.Fatalf("window A: cx=%+v err=%v, want one 80 crossing", cx, err)
 	}
-	// Force the window due and run the reset: zeroes spend, schedules next
-	// window, and clears the notify marker.
+	wsA := crossingWindowStart(t, f)
+
+	// Force the window due and run the real reset. This zeroes spend and
+	// schedules the next window but does NOT touch the notify marker (ResetBudgets
+	// must not clear it). Because the wall clock can't move past midnight in a unit
+	// test, next_budget_reset lands on the same next-midnight, so the window start
+	// is unchanged: the marker still holds wsA and must block a re-fire.
 	forceDue(t, f)
 	if _, err := f.s.ResetBudgets(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// A fresh batch crossing 80% again must fire once more (marker reset).
+	wsAfterReset := crossingWindowStart(t, f)
+	if !wsAfterReset.Equal(wsA) {
+		t.Fatalf("reset did not advance the window in a unit test: wsA=%v wsAfter=%v", wsA, wsAfterReset)
+	}
+	// Negative control: same window, spend re-crosses 80% -> the marker holds and
+	// NO crossing fires (this is what marker clearing in ResetBudgets would break).
+	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cx) != 0 {
+		t.Fatalf("same window after reset: got %+v, want zero crossings (marker still holds %v)", cx, wsA)
+	}
+
+	// Advance the window to a DISTINCT start (simulate the midnight rollover): a
+	// fresh record now lands in window B. The marker UPDATE's IS DISTINCT FROM $ws
+	// clause fires because wsB != wsA — re-arm via the changed window start, with
+	// no marker clearing.
+	forceWindowStart(t, f, now.AddDate(0, 0, -1)) // reset 1s ago: expired, wsB = 1 day before now
+	wsB := crossingWindowStart(t, f)
+	if wsB.Equal(wsA) {
+		t.Fatalf("forced wsB %v equals wsA %v; the re-fire below would be unproven", wsB, wsA)
+	}
 	cx, err = f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(900_000_000, now)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cx) != 1 || cx[0].Threshold != 80 || cx[0].SpendNanos != 900_000_000 {
-		t.Fatalf("after reset: got %+v, want one fresh 80 crossing at 900M", cx)
+		t.Fatalf("window B: got %+v, want one fresh 80 crossing at 900M (re-armed by the new ws)", cx)
 	}
 }
 
