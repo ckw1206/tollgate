@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { fromMicros } from '../api'
 import { useAuth } from '../auth'
 import { CopyButton, ErrorText, InlineCopy, Segmented, Table, useLoad } from '../components/ui'
-import type { Model } from '../types'
+import type { Group, Model } from '../types'
 
 // /docs: the user-facing API reference. Copy is verbatim from "Tollgate API Docs.dc.html";
 // the base URL comes from this page's origin and "Your models" from the console API.
@@ -335,7 +335,7 @@ function Param({ name, type, req, children }: { name: string; type: string; req?
 }
 
 export default function Docs() {
-  const { can } = useAuth()
+  const { me, can } = useAuth()
   const origin = window.location.origin
   const V1 = origin + '/v1'
   const [lang, setLangState] = useState<Lang>(storedLang)
@@ -349,9 +349,15 @@ export default function Docs() {
   }
   const c = code(V1)[lang]
   const langName = LANGS.find((l) => l.value === lang)!.label
-  // Enabled models only. Embeddings are an OpenAI-compatible-only endpoint.
+  // Enabled models you may call. Embeddings are an OpenAI-compatible-only endpoint. Without
+  // models:write GET /models is already that; writers get every model, so narrow to your
+  // group ∪ extra grants (as repo.Access, and KeyDialog's options).
   const models = useLoad<Model[]>('/console/api/v1/models')
-  const enabled = (models.data ?? []).filter((m) => m.enabled)
+  const writer = can('models:write')
+  const groups = useLoad<Group[]>(writer ? '/console/api/v1/groups' : null)
+  const group = groups.data?.find((g) => g.id === me!.user.group_id)
+  const allowed = (n: string) => !group || !group.models.length || group.models.includes(n) || me!.user.extra_models.includes(n)
+  const enabled = (models.data ?? []).filter((m) => m.enabled && allowed(m.name))
 
   return (
     <div className="leading-[1.55]">
@@ -422,9 +428,9 @@ export default function Docs() {
             <p className="max-w-[720px] text-muted-foreground">
               Enabled models you can call. A key with an <i>Allowed models</i> list sees only those — <C>GET /v1/models</C> with that key is the source of truth.
             </p>
-            <ErrorText>{models.error}</ErrorText>
+            <ErrorText>{models.error || groups.error}</ErrorText>
             <Table
-              rows={models.data ? enabled : models.error ? [] : null}
+              rows={models.data && (!writer || groups.data || groups.error) ? enabled : models.error ? [] : null}
               empty="No models are enabled yet."
               cols={[
                 { head: 'Name', cell: (m) => <code className="font-mono text-[13px] font-medium">{m.name}</code> },
