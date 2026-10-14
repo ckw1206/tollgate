@@ -9,9 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -64,13 +67,7 @@ func validWebhookURL(s string) bool {
 
 // validWebhookURLStrict is validWebhookURL with no "" exception: the test-event
 // endpoint needs an actual destination, so an empty/invalid value is a 400 there.
-func validWebhookURLStrict(s string) bool {
-	if s == "" {
-		return false
-	}
-	u, err := url.Parse(s)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
-}
+func validWebhookURLStrict(s string) bool { return s != "" && validWebhookURL(s) }
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	st, err := s.Store.GetSettings(r.Context())
@@ -126,19 +123,69 @@ func auditSettings(st *repo.Settings) *repo.Settings {
 // webhookTestTimeout bounds the test event; a var so tests can shorten it.
 var webhookTestTimeout = 5 * time.Second
 
-// testWebhook fires a single synthetic budget crossing at the configured URL and
+// testWebhook fires a single synthetic budget crossing at a webhook URL and
 // reports the HTTP outcome synchronously. It is a one-shot probe for the console
 // "Test" button — it does NOT go through the async sender (which is fire-and-forget
 // and can't report back). Gated on SettingsWrite.
-func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
-	st, err := s.Store.GetSettings(r.Context())
+//
+// The URL is taken from the optional JSON body {"url":"..."} when present and
+// non-empty (the console sends the EDITED form value, so an unsaved URL can be
+// tested); otherwise it falls back to the stored budget_webhook_url.
+//
+// Response contract: ALWAYS 200 with {"ok":bool,"status":int,"message":string},
+// except 400 (no valid URL / SSRF-rejected host / invalid body URL), 403 (RBAC),
+// 405, 415 in the standard error shape. status is the upstream HTTP status, 0
+// when no upstream response was received (unreachable or timeout).
+// isPublicHostFn defaults to isPublicHost; a var so delivery tests, which run
+// their fake upstream on 127.0.0.1, can permit loopback while the guard's real
+// rejection logic is still covered directly by TestWebhook_PublicHostGuard.
+var isPublicHostFn = isPublicHost
+
+// webhookTestControl is the dialer Control used by the test client. In tests it
+// is swapped for a loopback-permitting variant (see isPublicHostFn) so the
+// httptest-based delivery cases can run.
+var webhookTestControl func(network, address string, c syscall.RawConn) error = func(network, address string, c syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		storeErr(w, err)
-		return
+		return err
 	}
-	u := st.BudgetWebhookURL
+	if !isPublicHostFn(host) {
+		return fmt.Errorf("webhook host must be public (loopback, private and link-local addresses are not allowed)")
+	}
+	return nil
+}
+
+func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
+	var in struct{ URL string }
+	// The body is optional: an empty body means "test the stored URL" (the SPA
+	// may POST with no body on the "test what's saved" path).
+	if r.ContentLength > 0 {
+		if !decode(w, r, &in) {
+			return
+		}
+	}
+	u := in.URL
+	if u == "" {
+		st, err := s.Store.GetSettings(r.Context())
+		if err != nil {
+			storeErr(w, err)
+			return
+		}
+		u = st.BudgetWebhookURL
+	}
 	if !validWebhookURLStrict(u) {
 		badRequest(w, "set a valid budget_webhook_url (http/https with a host) first")
+		return
+	}
+	// SSRF guard: the probe must only reach public hosts — never loopback,
+	// private or link-local (cloud metadata, internal services).
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" {
+		badRequest(w, "invalid webhook URL")
+		return
+	}
+	if !isPublicHostFn(parsed.Host) {
+		badRequest(w, "webhook host must be public (loopback, private and link-local addresses are not allowed)")
 		return
 	}
 	crossing := repo.BudgetCrossing{
@@ -150,31 +197,36 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 		BudgetNanos: 0,
 		BudgetType:  "daily",
 	}
-	body, err := json.Marshal(crossing)
+	payload, err := json.Marshal(crossing)
 	if err != nil {
 		storeErr(w, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), webhookTestTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(payload))
 	if err != nil {
 		badRequest(w, "invalid webhook URL")
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// A dedicated client that doesn't follow redirects: the test reaches only the
-	// validated URL, never a redirect target.
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// validated URL, never a redirect target. The dialer's Control re-checks every
+	// resolved IP (DNS can point a public name at a private one).
+	dialer := &net.Dialer{Control: webhookTestControl}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport: &http.Transport{DialContext: dialer.DialContext, TLSHandshakeTimeout: webhookTestTimeout}}
 	resp, err := client.Do(req)
 	if err != nil {
-		// A delivery failure (connection error or timeout) is a 5xx: the webhook is
-		// down or unreachable. status 0 means no upstream response was received.
+		// A delivery failure (connection error, timeout, TLS, SSRF rejection at
+		// connect time) is NOT a 5xx: the caller is asking "did the endpoint work?"
+		// and the answer is in the body. 200 + ok:false keeps the detail from being
+		// replaced by the client's generic "internal error".
 		msg := redactErr(err)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			msg = fmt.Sprintf("timed out after %s", webhookTestTimeout)
 		}
-		api.WriteJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "status": 0, "message": msg})
+		api.WriteJSON(w, 200, map[string]any{"ok": false, "status": 0, "message": msg})
 		return
 	}
 	defer resp.Body.Close()
@@ -183,20 +235,59 @@ func (s *Server) testWebhook(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, 200, map[string]any{"ok": true, "status": resp.StatusCode, "message": ""})
 		return
 	}
-	// The endpoint answered but rejected the event: 5xx-style, with the upstream
-	// status so the console can show it.
-	api.WriteJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "status": resp.StatusCode, "message": "endpoint returned " + resp.Status})
+	// The endpoint answered but rejected the event: still 200, with the upstream
+	// status so the console can show "endpoint returned 404 Not Found".
+	api.WriteJSON(w, 200, map[string]any{"ok": false, "status": resp.StatusCode, "message": "endpoint returned " + resp.Status})
 }
 
-// redactErr strips a request URL from an error string before echoing it, so a
-// URL with an embedded credential (user:pass@host) can't leak into the response.
+// isPublicHost reports whether a webhook destination host is a public IP
+// (literal) or a name that resolves ONLY to public IPs. It rejects loopback,
+// private (RFC1918 + fc00::/7), link-local (169.254/16, fe80::/10), multicast
+// and unspecified addresses so the test endpoint cannot be used to probe the
+// internal network (cloud metadata, in-cluster services, …).
+//
+// NOTE: stream B adds the equivalent shared dialer in core/webhook/dialer.go
+// for the production sender; dedupe the two on merge.
+func isPublicHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return isPublicIP(ip)
+	}
+	var ips []netip.Addr
+	resolved, err := net.LookupIP(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range resolved {
+		if a, ok := netip.AddrFromSlice(ip); ok {
+			ips = append(ips, a)
+		}
+	}
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			return false
+		}
+	}
+	return len(ips) > 0
+}
+
+func isPublicIP(ip netip.Addr) bool {
+	return !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() &&
+		!ip.IsMulticast() && !ip.IsUnspecified()
+}
+
+// redactErr returns a human-readable failure cause from a webhook delivery
+// error WITHOUT the request URL. For *url.Error (which is how net/http wraps
+// connection/TLS/timeout errors) it surfaces the CAUSE — net/http already
+// strips the password from *url.Error, so "x509: …" / "connection refused"
+// reach the admin — instead of throwing it away. Anything that is not a
+// *url.Error is passed through unchanged (no URL present to leak).
 func redactErr(err error) string {
-	msg := err.Error()
-	if i := strings.Index(msg, "http://"); i >= 0 {
-		msg = msg[:i] + "[url redacted]"
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err.Error()
 	}
-	if i := strings.Index(msg, "https://"); i >= 0 {
-		msg = msg[:i] + "[url redacted]"
-	}
-	return msg
+	return err.Error()
 }

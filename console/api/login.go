@@ -55,16 +55,25 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	s.writeMe(w, r, auth.UserFrom(r.Context()))
 }
 
+// meServer is the server blob /auth/me returns to EVERY authenticated role, so
+// it must never contain secrets: budget_webhook_url (its URL path may be the
+// credential, or it may embed user:pass@host) is deliberately omitted. Admins
+// read the full settings — including the webhook URL — from
+// GET /console/api/v1/settings (settings:read, admin-only).
+type meServer struct {
+	*repo.Settings
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+}
+
 func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, u *repo.User) {
 	st, err := s.Store.GetSettings(r.Context())
 	if err != nil {
 		storeErr(w, err)
 		return
 	}
-	server := struct {
-		*repo.Settings
-		Version string `json:"version"`
-		Commit  string `json:"commit"`
-	}{st, s.Version, s.Commit}
+	redacted := *st
+	redacted.BudgetWebhookURL = ""
+	server := meServer{Settings: &redacted, Version: s.Version, Commit: s.Commit}
 	api.WriteJSON(w, 200, map[string]any{"user": u, "permissions": rbac.Permissions(u.Role), "server": server})
 }
