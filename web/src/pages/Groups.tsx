@@ -51,6 +51,7 @@ export default function Groups() {
         empty="No groups yet."
         cols={[
           { head: 'Name', cell: (g) => g.name },
+          { head: 'Members', cell: (g) => g.members },
           { head: 'Budget (USD)', cell: (g) => budgetText(g) },
           { head: 'RPM / TPM', cell: (g) => `${limitText(g.rpm_limit)} / ${limitText(g.tpm_limit)}` },
           { head: '', cell: (g) => writable && <RowActions><Button size="sm" variant="ghost" onClick={() => open(g)}>Edit</Button></RowActions> },

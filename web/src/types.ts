@@ -23,6 +23,8 @@ export interface User {
 export interface Group extends Limits {
   id: string
   name: string
+  models: string[] // empty = every enabled model
+  members: number
   created_at: string
 }
 
