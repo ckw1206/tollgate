@@ -24,7 +24,7 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 2s --health-retries 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -41,7 +41,7 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: actions/setup-go@v5
@@ -96,7 +96,7 @@ jobs:
           manifest-file: .release-please-manifest.json
 
       - if: steps.rp.outputs.release_created
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - if: steps.rp.outputs.release_created
         uses: actions/setup-node@v4
         with:
