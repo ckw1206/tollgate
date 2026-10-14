@@ -31,6 +31,11 @@ func TestHandler(t *testing.T) {
 	if w := get("/invite/abc"); w.Body.String() != "<html>app</html>" {
 		t.Fatal("invite page must be the SPA")
 	}
+	for _, p := range []string{"/welcome", "/setup?token=x", "/people/groups", "/models/credentials"} {
+		if w := get(p); w.Body.String() != "<html>app</html>" || w.Header().Get("X-Frame-Options") != "DENY" {
+			t.Fatalf("%s must be the SPA: %q", p, w.Body)
+		}
+	}
 	if w := get("/console/api/v1/nope"); w.Code != 404 || strings.Contains(w.Body.String(), "<html>") {
 		t.Fatalf("unknown API path served HTML: %d", w.Code)
 	}

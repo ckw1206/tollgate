@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
 import { api, ApiError } from '../api'
 import type { Credential, CredentialTest } from '../types'
-import { Button, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
+import { Button, controlBox, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
 
 // The dialog's provider choice: Vertex AI is provider "google" with a service account.
 export type CredProvider = 'openai' | 'anthropic' | 'google' | 'vertex'
@@ -130,16 +130,18 @@ export default function CredentialDialog({ credential, onClose, onSaved }: {
       onChange={set('secret')}
     />
   )
-  const secretHint = vertex ? "The key file's contents. Encrypted at rest." : form.provider === 'openai' && !editing ? 'Optional: leave blank for servers without auth. Encrypted at rest.' : 'Encrypted at rest.'
+  const secretHint = vertex ? "The key file's contents. Encrypted at rest." : form.provider === 'openai' && !editing ? 'Encrypted at rest. Leave blank for keyless self-hosted endpoints.' : 'Encrypted at rest.'
 
   return (
     <Modal title={editing ? `Edit "${credential.name}"` : 'Add credential'} subtitle={editing ? usedBy(credential.used_by) : undefined} onClose={onClose}>
       <form onSubmit={save} className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Name"><input className={inputCls} required value={form.name} onChange={set('name')} /></Field>
-          <Field label="Provider" hint={editing ? "Can't be changed." : undefined}>
+          <Field label="Name" hint={editing ? 'Models keep their link.' : 'Shown in the Models dialog.'}>
+            <input className={inputCls} required value={form.name} onChange={set('name')} />
+          </Field>
+          <Field label="Provider" hint={editing ? 'Fixed after creation.' : undefined}>
             {editing ? (
-              <input className={inputCls} readOnly value={PROVIDERS[form.provider].label} />
+              <input className={controlBox + ' mt-1 block min-h-9 w-full bg-muted px-3 py-1 text-sm text-muted-foreground'} readOnly value={PROVIDERS[form.provider].label} />
             ) : (
               <select className={inputCls} value={form.provider} onChange={setProvider}>
                 {(Object.keys(PROVIDERS) as CredProvider[]).map((p) => <option key={p} value={p}>{PROVIDERS[p].label}</option>)}
@@ -150,10 +152,10 @@ export default function CredentialDialog({ credential, onClose, onSaved }: {
         {vertex ? (
           <div className="grid grid-cols-2 gap-3">
             <Field label="Project ID"><input className={inputCls + ' font-mono'} required value={form.vertex_project} onChange={set('vertex_project')} /></Field>
-            <Field label="Location" hint="e.g. us-central1, europe-west4, global"><input className={inputCls + ' font-mono'} required value={form.vertex_location} onChange={set('vertex_location')} /></Field>
+            <Field label="Location" hint="e.g. us-east5, global, …"><input className={inputCls + ' font-mono'} required value={form.vertex_location} onChange={set('vertex_location')} /></Field>
           </div>
         ) : (
-          <Field label="API endpoint" hint="Models can override it.">
+          <Field label="API endpoint" hint={<>Default <code className="font-mono">{PROVIDERS[form.provider].base}</code>. Use your Azure, vLLM, Ollama or proxy URL.</>}>
             <input
               className={inputCls + ' font-mono'}
               value={form.api_base}
@@ -177,12 +179,15 @@ export default function CredentialDialog({ credential, onClose, onSaved }: {
               </span>
             </>
           ) : (
-            <div className="mt-1 flex min-h-9 items-center justify-between gap-3 rounded-md border border-border bg-muted px-3 py-1">
-              <span className="font-mono text-xs text-muted-foreground">
-                •••••••• saved · updated {new Date(credential!.secret_updated_at).toLocaleDateString()}
-              </span>
-              <Button type="button" size="xs" variant="ghost" onClick={() => setReplacing(true)}>Replace</Button>
-            </div>
+            <>
+              <div className="mt-1 flex min-h-9 items-center justify-between gap-3 rounded-md border border-border bg-muted px-3 py-1">
+                <span className="font-mono text-xs text-muted-foreground">
+                  •••••••• saved · updated {new Date(credential!.secret_updated_at).toLocaleDateString()}
+                </span>
+                <Button type="button" size="xs" variant="ghost" onClick={() => setReplacing(true)}>Replace</Button>
+              </div>
+              <span className="mt-1 block text-xs text-muted-foreground">The saved key can't be shown. Replace opens an empty field; leave it closed to keep the current key.</span>
+            </>
           )}
         </div>
         {editing && n > 0 && (

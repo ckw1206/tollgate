@@ -1,5 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { Link, matchPath, useLocation } from 'react-router-dom'
 import { api } from '../api'
+import { useAuth } from '../auth'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
 // Colors, radii and fonts come from Alison UI tokens (see index.css).
@@ -7,9 +9,11 @@ import { api } from '../api'
 // controlCls carries only box, border, padding-x, color and focus styles. Size, margin and
 // width live in inputCls or at the call site: Tailwind v4 orders conflicting utilities by
 // value, not by position in the class string, so "inputCls + ' mt-0'" would not win.
-export const controlCls =
-  'rounded-md border border-input px-3 text-foreground outline-none ' +
-  'focus:border-ring focus:ring-[3px] focus:ring-ring/50 aria-[invalid=true]:border-destructive disabled:opacity-50'
+// controlBox is the same without padding-x, color and the disabled look, for controls that
+// need their own (an inline 28px select, the locked API base).
+export const controlBox =
+  'rounded-md border border-input outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/50 aria-[invalid=true]:border-destructive'
+export const controlCls = controlBox + ' px-3 text-foreground disabled:opacity-50'
 
 export const inputCls = controlCls + ' mt-1 block min-h-9 w-full py-1 text-sm'
 
@@ -44,7 +48,7 @@ export function Banner({ children, onDismiss }: { children: ReactNode; onDismiss
   )
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: ReactNode; hint?: ReactNode; children: ReactNode }) {
   return (
     <label className="block text-sm">
       <span className="font-medium">{label}</span>
@@ -293,13 +297,48 @@ export function ErrorText({ children }: { children: ReactNode }) {
   return <p role="alert" className="text-sm text-destructive">{children}</p>
 }
 
-export function PageHeader({ title, description, children }: { title: string; description?: string; children?: ReactNode }) {
+export interface Tab {
+  to: string
+  label: string
+  perm: string
+}
+
+// PageTabs: underline tabs under the page header, one route per tab. Tabs the role can't see
+// are dropped, and the bar is hidden when one is left.
+function PageTabs({ tabs }: { tabs: Tab[] }) {
+  const { can } = useAuth()
+  const { pathname } = useLocation()
+  const shown = tabs.filter((t) => can(t.perm))
+  if (shown.length < 2) return null
+  return (
+    <div role="tablist" className="-mt-2 mb-5 flex gap-1 overflow-x-auto border-b border-border">
+      {shown.map((t) => {
+        const on = !!matchPath(t.to, pathname)
+        return (
+          <Link
+            key={t.to}
+            to={t.to}
+            role="tab"
+            aria-selected={on}
+            className={`flex h-9 shrink-0 items-center whitespace-nowrap px-3 text-sm ${on ? 'font-medium text-foreground shadow-[inset_0_-2px_0_var(--primary)]' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t.label}
+          </Link>
+        )
+      })}
+    </div>
+  )
+}
+
+// PageHeader: title and actions (the tab's CTA), then the tabs, then the description.
+export function PageHeader({ title, description, tabs, children }: { title: string; description?: string; tabs?: Tab[]; children?: ReactNode }) {
   return (
     <>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold leading-[1.2]">{title}</h1>
         {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
       </div>
+      {tabs && <PageTabs tabs={tabs} />}
       {description && <p className="-mt-2 mb-4 text-sm text-muted-foreground">{description}</p>}
     </>
   )

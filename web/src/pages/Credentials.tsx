@@ -5,6 +5,7 @@ import {
   Button, ConfirmDialog, ErrorText, PageHeader, RowActions, rowsOf, Table, useLoad,
 } from '../components/ui'
 import CredentialDialog, { credEndpoint, credProvider, PROVIDERS } from '../components/CredentialDialog'
+import { MODEL_TABS } from '../Layout'
 import type { Credential } from '../types'
 
 
@@ -26,8 +27,9 @@ export default function Credentials() {
   return (
     <>
       <PageHeader
-        title="Credentials"
-        description="Secrets are encrypted at rest and can't be viewed again. To rotate, edit the credential and paste the new secret."
+        title="Models"
+        tabs={MODEL_TABS}
+        description="Provider secrets used by models. Encrypted at rest and never shown again — to rotate, edit and Replace the secret."
       >
         {writable && <Button onClick={() => setOpen(true)}>Add credential</Button>}
       </PageHeader>

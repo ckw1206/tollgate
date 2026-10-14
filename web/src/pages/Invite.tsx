@@ -2,14 +2,14 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
-import { LandingButton, LandingField, LandingShell, useLanding } from '../components/LandingShell'
+import { AuthShell, LandingButton, LandingField, useLanding } from '../components/LandingShell'
 import { Badge, ErrorText, type Tone } from '../components/ui'
 
 interface InviteInfo { role: string; group_name: string; email: string; status: 'active' | 'used' | 'revoked' | 'expired' }
 
 const tone: Record<InviteInfo['status'], Tone> = { active: 'success', used: 'inactive', revoked: 'error', expired: 'warning' }
 
-// The invite page reuses the landing backdrop with the invite card (no hero).
+// The invite page uses the sign-in layout (AuthShell) with the invite card.
 export default function Invite() {
   const { token = '' } = useParams()
   const { refresh } = useAuth()
@@ -50,7 +50,7 @@ export default function Invite() {
   const set = (k: keyof typeof form) => (e: ChangeEvent<HTMLInputElement>) => setForm({ ...form, [k]: e.target.value })
   if (!info && !loadError) return null // no flash of the form while loading
   return (
-    <LandingShell info={landing} hero={false}>
+    <AuthShell info={landing}>
       {loadError ? (
         <p className="text-sm">{loadError}</p>
       ) : info && info.status !== 'active' ? (
@@ -85,6 +85,6 @@ export default function Invite() {
           </form>
         )
       )}
-    </LandingShell>
+    </AuthShell>
   )
 }

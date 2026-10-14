@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './auth'
-import { Segmented } from './components/ui'
+import { Segmented, type Tab } from './components/ui'
 import type { ServerInfo } from './types'
 
 // One layout for every role; nav items are filtered by permission. Order is fixed.
@@ -9,12 +9,20 @@ const nav = [
   { to: '/', label: 'Dashboard', perm: 'spend:read_own' },
   { to: '/keys', label: 'API keys', perm: 'keys:read_own' },
   { to: '/models', label: 'Models', perm: 'models:read' },
-  { to: '/groups', label: 'Groups', perm: 'groups:read_own' },
-  { to: '/users', label: 'Users', perm: 'users:read' },
-  { to: '/invites', label: 'Invites', perm: 'invites:read' },
-  { to: '/credentials', label: 'Credentials', perm: 'models:write' },
+  { to: '/people', label: 'Users & groups', perm: 'groups:read_own' },
   { to: '/audit', label: 'Audit log', perm: 'audit:read' },
   { to: '/settings', label: 'Settings', perm: 'settings:read' },
+]
+
+// Page tabs of the Models and Users & groups nav items, one route each.
+export const MODEL_TABS: Tab[] = [
+  { to: '/models', label: 'Models', perm: 'models:read' },
+  { to: '/models/credentials', label: 'Credentials', perm: 'models:write' },
+]
+export const PEOPLE_TABS: Tab[] = [
+  { to: '/people', label: 'Users', perm: 'users:read' },
+  { to: '/people/groups', label: 'Groups', perm: 'groups:read_own' },
+  { to: '/people/invites', label: 'Invites', perm: 'invites:read' },
 ]
 
 const REPO = 'https://github.com/ckw1206/tollgate'
@@ -42,15 +50,14 @@ function useTheme(): [Mode, (m: Mode) => void] {
 }
 
 export function Version({ server }: { server: ServerInfo }) {
-  const sha = server.commit ? (
-    <a className="font-mono hover:underline" href={`${REPO}/commit/${server.commit}`} target="_blank" rel="noreferrer">{server.commit.slice(0, 7)}</a>
-  ) : null
   const tagged = server.version && server.version !== 'dev'
   return (
-    <div className="text-[11px] text-muted-foreground">
-      Version:{' '}
+    <div className="mt-2 flex flex-wrap gap-x-1 text-[11px] text-muted-foreground">
+      <span>Version:</span>
       {tagged ? <a className="hover:underline" href={`${REPO}/releases/tag/${server.version}`} target="_blank" rel="noreferrer">{server.version}</a> : 'dev'}
-      {sha && <> ({sha})</>}
+      {server.commit && (
+        <a className="font-mono hover:underline" href={`${REPO}/commit/${server.commit}`} target="_blank" rel="noreferrer">({server.commit.slice(0, 7)})</a>
+      )}
     </div>
   )
 }
@@ -60,13 +67,11 @@ function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate
   const [mode, setMode] = useTheme()
   if (!me) return null
   return (
-    <div className="space-y-2 text-xs text-muted-foreground">
-      <div>
-        <div className="font-medium text-foreground">{me.user.name}</div>
-        <div>{me.user.email} · {me.user.role}</div>
-      </div>
-      <button className="underline hover:text-foreground" onClick={onSignOut}>Sign out</button>
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+      <span className="font-medium text-foreground">{me.user.name}</span>
+      <span>{me.user.email} · {me.user.role}</span>
+      <button className="mt-1.5 self-start underline hover:text-foreground" onClick={onSignOut}>Sign out</button>
+      <div className="mt-2.5 flex items-center justify-between gap-2">
         <span>Theme</span>
         <Segmented small label="Theme" value={mode} onChange={setMode} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
       </div>
@@ -74,7 +79,7 @@ function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate
         to="/docs"
         onClick={onNavigate}
         className={({ isActive }) =>
-          `mt-0.5 flex justify-between border-t border-sidebar-border pt-2.5 text-xs font-medium ${isActive ? 'text-primary' : 'text-foreground hover:text-muted-foreground'}`
+          `mt-2.5 flex justify-between border-t border-sidebar-border pt-2.5 text-xs font-medium ${isActive ? 'text-primary' : 'text-foreground hover:text-muted-foreground'}`
         }
       >
         <span>API docs</span>
@@ -88,17 +93,19 @@ function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('') || '?'
 
 export default function Layout() {
-  const { me, can, logout } = useAuth()
-  const navigate = useNavigate()
+  const { me, can, logout: signOut } = useAuth()
   const [menu, setMenu] = useState(false)
   if (!me) return null
-  const signOut = () => logout().then(() => navigate('/login'))
   const items = nav.filter((n) => can(n.perm))
   const brand = (
-    <div className="flex items-center gap-2 text-lg font-semibold">
+    <Link
+      to="/welcome"
+      title="Go to the landing page"
+      className="flex min-w-0 items-center gap-2 text-lg font-semibold hover:opacity-80 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
       <BrandIcon icon={me.server.server_icon} />
       <span className="truncate">{me.server.server_name}</span>
-    </div>
+    </Link>
   )
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
@@ -121,7 +128,7 @@ export default function Layout() {
             )}
           </div>
         </div>
-        <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-1 md:flex-col md:overflow-y-auto">
+        <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-1 md:flex-col md:overflow-y-auto md:pb-4">
           {items.map((n) => (
             <NavLink
               key={n.to}

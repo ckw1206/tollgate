@@ -544,7 +544,7 @@ export default function Docs() {
               ))}
             </div>
             <p className="text-[13px] text-muted-foreground">
-              Your limits are on <A to="/keys">API keys</A> (expand a key) and <A to="/groups">Groups</A>. Spend is on <A to="/">Dashboard</A>.
+              Your limits are on <A to="/keys">API keys</A> (expand a key) and <A to="/people/groups">Groups</A>. Spend is on <A to="/">Dashboard</A>.
             </p>
           </section>
 

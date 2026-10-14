@@ -2,10 +2,11 @@ import { useState } from 'react'
 import { api, short, when } from '../api'
 import { useAuth } from '../auth'
 import InviteDialog from '../components/InviteDialog'
-import { Badge, Button, ConfirmDialog, controlCls, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad } from '../components/ui'
+import { Badge, Button, ConfirmDialog, controlBox, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog, Table, useLoad } from '../components/ui'
+import { PEOPLE_TABS } from '../Layout'
 import type { Group, User } from '../types'
 
-const inlineSelect = controlCls + ' h-7 py-0 text-[13px]'
+const inlineSelect = controlBox + ' h-7 min-w-[104px] px-2 py-0 text-[13px] text-foreground disabled:opacity-50'
 
 export default function Users() {
   const { me, can } = useAuth()
@@ -29,8 +30,9 @@ export default function Users() {
   return (
     <>
       <PageHeader
-        title="Users"
-        description="Tollgate is invite-only — there is no create-user API. Invite people from here or from Invites."
+        title="Users & groups"
+        tabs={PEOPLE_TABS}
+        description={'Tollgate is invite-only — there is no create-user API. "Invite user" creates a one-time invite link.'}
       >
         {can('invites:write') && <Button disabled={!groups.data} onClick={() => setInviting(true)}>Invite user</Button>}
       </PageHeader>

@@ -3,6 +3,7 @@ import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
 import { budgetText, LimitsFields, limitsPayload, limitsState, limitText, type LimitsState } from '../components/LimitsFields'
 import { Button, ErrorText, Field, inputCls, Modal, ModalFooter, PageHeader, RowActions, rowsOf, Table, useLoad } from '../components/ui'
+import { PEOPLE_TABS } from '../Layout'
 import type { Group } from '../types'
 
 export default function Groups() {
@@ -41,7 +42,7 @@ export default function Groups() {
 
   return (
     <>
-      <PageHeader title="Groups" description="A group is a cost center. Its budget and rate limits apply on top of each key's own limits.">
+      <PageHeader title="Users & groups" tabs={PEOPLE_TABS} description="A group is a cost center. Its budget and rate limits apply on top of each key's own limits.">
         {writable && <Button onClick={() => open('new')}>New group</Button>}
       </PageHeader>
       <div className="mb-4"><ErrorText>{groups.error}</ErrorText></div>
