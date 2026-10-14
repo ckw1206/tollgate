@@ -8,9 +8,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 
 	"tollgate/core/db/repo"
@@ -34,6 +37,12 @@ type Sender struct {
 	settings func(ctx context.Context) (string, error) // budget_webhook_url
 	client   *http.Client
 	ch       chan repo.BudgetCrossing
+	done     chan struct{} // closed when Run returns
+
+	// mu guards closed and the send in Submit, so a Submit racing Close can
+	// never send on the closed channel (which would panic).
+	mu     sync.Mutex
+	closed bool
 }
 
 // NewSender builds a Sender backed by the settings store. client supplies the
@@ -49,13 +58,21 @@ func NewSender(store *repo.Store, client *http.Client) *Sender {
 		},
 		client: client,
 		ch:     make(chan repo.BudgetCrossing, bufferSize),
+		done:   make(chan struct{}),
 	}
 }
 
 // Submit enqueues a crossing for delivery and returns immediately. It never
-// blocks: if the buffer is full it drops the crossing with a log so the spend
-// path is never stalled.
+// blocks: if the buffer is full (or the sender is already closed) it drops the
+// crossing with a log so the spend path is never stalled.
 func (s *Sender) Submit(_ context.Context, c repo.BudgetCrossing) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		slog.Warn("webhook sender closed; dropping budget crossing",
+			"scope", c.Scope, "label", c.Label, "threshold", c.Threshold)
+		return
+	}
 	select {
 	case s.ch <- c:
 	default:
@@ -64,23 +81,50 @@ func (s *Sender) Submit(_ context.Context, c repo.BudgetCrossing) {
 	}
 }
 
-// Run drains the queue until ctx is cancelled.
+// Close stops accepting crossings and closes the delivery channel so Run can
+// drain what is already queued and return. Submits racing or following Close
+// are dropped, never panicked. Idempotent; safe to call whether or not Run is
+// running. Call it (and wait on Done) at shutdown so crossings from the final
+// flush are delivered before the process exits.
+func (s *Sender) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	close(s.ch)
+}
+
+// Done is closed when Run returns.
+func (s *Sender) Done() <-chan struct{} { return s.done }
+
+// Run drains the queue until ctx is cancelled, or Close has closed the channel
+// and it is empty.
 func (s *Sender) Run(ctx context.Context) {
+	if s.done != nil {
+		defer close(s.done)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case c := <-s.ch:
+		case c, ok := <-s.ch:
+			if !ok {
+				return // channel closed and drained
+			}
 			s.deliver(ctx, c)
 		}
 	}
 }
 
 // deliver POSTs the crossing with a bounded retry. Every failure is logged and
-// swallowed; it is never returned to the caller.
+// swallowed; it is never returned to the caller. Request errors are scrubbed
+// before logging: a *url.Error carries the full request URL, and the webhook
+// URL's path is itself a credential (Slack/Discord incoming webhooks).
 func (s *Sender) deliver(ctx context.Context, c repo.BudgetCrossing) {
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := s.sendOnce(ctx, c)
+		err := scrubRequestError(s.sendOnce(ctx, c))
 		switch {
 		case err == nil || ctx.Err() != nil:
 			return
@@ -99,9 +143,25 @@ func (s *Sender) deliver(ctx context.Context, c repo.BudgetCrossing) {
 	}
 }
 
+// scrubRequestError unwraps a *url.Error so the error that reaches the logs
+// does not include the request URL. net/http redacts only user:pass from the
+// URL in its error text; a path token (the Slack/Discord webhook secret) would
+// survive, so the URL is stripped entirely.
+func scrubRequestError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
+}
+
 // sendOnce makes one POST to the configured URL. It returns nil on a 2xx
 // response and when no URL is configured (nothing to do is not a failure);
-// anything else is an error to be retried.
+// anything else is an error to be retried. A 3xx is a failure, not a
+// delivery: the client is configured with CheckRedirect =
+// http.ErrUseLastResponse, so a redirect arrives here un-followed. Following
+// it would make Go resend the POST as a GET with no body and the payload would
+// be silently lost.
 func (s *Sender) sendOnce(ctx context.Context, c repo.BudgetCrossing) error {
 	u, err := s.settings(ctx)
 	if err != nil {
@@ -128,8 +188,12 @@ func (s *Sender) sendOnce(ctx context.Context, c repo.BudgetCrossing) error {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		return fmt.Errorf("webhook returned redirect %s (not followed)", resp.Status)
+	default:
+		return fmt.Errorf("webhook returned %s", resp.Status)
 	}
-	return fmt.Errorf("webhook returned %s", resp.Status)
 }

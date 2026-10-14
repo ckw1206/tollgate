@@ -108,18 +108,31 @@ func serve() error {
 		return err
 	}
 
+	// Budget-crossing webhook (#24). The sender is the last hop in the spend path:
+	// Submit never blocks, every delivery failure is logged and dropped. The client
+	// carries its own timeout on top of the sender's per-attempt timeout, a
+	// transport whose dialer refuses internal addresses (SSRF guard: the URL is
+	// admin-configured), and no redirect following — a 3xx must fail loudly, not
+	// be chased as a bodyless GET.
+	webhookClient := &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: webhook.SafeTransport(),
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	ws := webhook.NewSender(store, webhookClient)
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	defer wsCancel()
+	go ws.Run(wsCtx)
+
 	rec := spend.NewRecorder(store)
 	recCtx, recCancel := context.WithCancel(context.Background())
 	defer recCancel() // cancel after HTTP drains, so no handler records into a stopped recorder
-	go rec.Run(recCtx)
-
-	// Budget-crossing webhook (#24). The sender is the last hop in the spend path:
-	// Submit never blocks, every delivery failure is logged and dropped. The client
-	// carries its own timeout on top of the sender's per-attempt timeout.
-	webhookClient := &http.Client{Timeout: 5 * time.Second}
-	ws := webhook.NewSender(store, webhookClient)
-	go ws.Run(ctx)
+	// Wired before Run starts so no flush can ever read OnCrossing nil-then-set
+	// from another goroutine (the first flush can beat the assignment).
 	rec.OnCrossing = func(c repo.BudgetCrossing) { ws.Submit(recCtx, c) }
+	go rec.Run(recCtx)
 
 	worker.Every(ctx, "budget_reset", time.Minute, func(ctx context.Context) error {
 		_, err := store.ResetBudgets(ctx)
@@ -160,8 +173,13 @@ func serve() error {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("http shutdown", "err", err)
 	}
-	recCancel() // after HTTP drains, so no handler records into a stopped recorder
-	<-rec.Done()
+	recCancel()  // after HTTP drains, so no handler records into a stopped recorder
+	<-rec.Done() // the recorder's final flush (and its crossings) is done
+	// The sender outlives the recorder: crossings from the final flush were
+	// Submited after the signal, so the sender runs on its own context and is
+	// shut down only after the recorder's Done, draining them before exit.
+	ws.Close()
+	<-ws.Done()
 	return nil
 }
 
