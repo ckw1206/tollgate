@@ -31,6 +31,7 @@ type Model struct {
 	CredentialKind                             string // "", "api_key", "gcp_service_account"
 	Secret                                     []byte
 	Prices                                     Prices
+	ContextWindow                              int64 // total context budget in tokens; 0 = unset
 	Extra                                      Extra
 	Created                                    int64
 }

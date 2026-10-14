@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react'
-import { api, ApiError, fromMicros, toMicros } from '../api'
+import { api, ApiError, fromMicros, num, toMicros } from '../api'
 import type { Credential, Model } from '../types'
 import { credEndpoint, credProvider, PROVIDERS } from './CredentialDialog'
 import { Button, controlBox, controlCls, ErrorText, Field, inputCls, Modal, ModalFooter } from './ui'
@@ -11,7 +11,7 @@ import { Button, controlBox, controlCls, ErrorText, Field, inputCls, Modal, Moda
 
 export interface Form {
   name: string; provider: Model['provider']; upstream_model: string; api_base: string; credential_id: string; enabled: boolean
-  price_in: string; price_out: string; price_cr: string; price_cw: string; extra: string
+  price_in: string; price_out: string; price_cr: string; price_cw: string; context_window: string; extra: string
 }
 
 export const toForm = (m?: Model): Form => ({
@@ -20,6 +20,7 @@ export const toForm = (m?: Model): Form => ({
   price_in: m ? fromMicros(m.price_input_micros) : '', price_out: m ? fromMicros(m.price_output_micros) : '',
   price_cr: m?.price_cache_read_micros != null ? fromMicros(m.price_cache_read_micros) : '',
   price_cw: m?.price_cache_write_micros != null ? fromMicros(m.price_cache_write_micros) : '',
+  context_window: m?.context_window != null ? String(m.context_window) : '',
   extra: JSON.stringify(m?.extra ?? {}, null, 2),
 })
 
@@ -30,6 +31,7 @@ export const payload = (f: Form) => ({
   credential_id: f.credential_id || null, enabled: f.enabled,
   price_input_micros: toMicros(f.price_in), price_output_micros: toMicros(f.price_out),
   price_cache_read_micros: optMicros(f.price_cr), price_cache_write_micros: optMicros(f.price_cw),
+  context_window: num(f.context_window),
   extra: JSON.parse(f.extra || '{}'),
 })
 
@@ -118,6 +120,7 @@ export default function ModelDialog({ model, creds, onClose, onSaved }: {
           <Field label="Output $ / 1M"><input className={inputCls} type="number" min="0" step="any" required value={form.price_out} onChange={set('price_out')} /></Field>
           <Field label="Cache read $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cr} onChange={set('price_cr')} /></Field>
           <Field label="Cache write $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cw} onChange={set('price_cw')} /></Field>
+          <Field label="Context window (tokens)" hint="Blank = not set"><input className={inputCls} type="number" min="1" step="1" value={form.context_window} onChange={set('context_window')} /></Field>
         </div>
         <Field label="Extra (JSON)" hint='e.g. {"headers":{"X-Org":"me"}}. vertex_project / vertex_location override the credential.'>
           <textarea className={controlCls + ' mt-1 block h-24 w-full py-1 font-mono text-xs'} value={form.extra} onChange={set('extra')} />

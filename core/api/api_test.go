@@ -77,7 +77,7 @@ func newEnv(t *testing.T, keyIn repo.KeyInput) *env {
 	e := &env{db: d, store: s, user: u, key: k, raw: raw, prov: &fakeProvider{usage: llm.Usage{Input: 1000, Output: 500}}}
 	reg := llm.NewRegistry(map[string]llm.Provider{"openai": e.prov})
 	reg.Replace([]*llm.Model{
-		{ID: "11111111-1111-1111-1111-111111111111", Name: "fast", Provider: "openai", Prices: llm.Prices{InputMicros: 2_500_000, OutputMicros: 10_000_000}},
+		{ID: "11111111-1111-1111-1111-111111111111", Name: "fast", Provider: "openai", Prices: llm.Prices{InputMicros: 2_500_000, OutputMicros: 10_000_000}, ContextWindow: 128000},
 		{ID: "22222222-2222-2222-2222-222222222222", Name: "slow", Provider: "openai"},
 	})
 	e.srv = &Server{Store: s, Cache: cache.FromClient(redis.NewClient(&redis.Options{Addr: mr.Addr()})), Registry: reg, Now: time.Now,
@@ -268,6 +268,51 @@ func TestModels_FiltersByAllowList(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &out)
 	if w.Code != 200 || len(out.Data) != 1 || out.Data[0].ID != "slow" {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// TestModels_ContextWindow: /v1/models emits context_window only for models that have one.
+// The unset model must omit the key entirely (never null, never 0).
+func TestModels_ContextWindow(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	w := e.do("GET", "/v1/models", e.raw, "")
+	var out struct {
+		Data []struct {
+			ID            string
+			ContextWindow *int64 `json:"context_window"`
+		}
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("%d %s: %v", w.Code, w.Body, err)
+	}
+	if w.Code != 200 || len(out.Data) != 2 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	byID := map[string]*struct {
+		ID            string
+		ContextWindow *int64 `json:"context_window"`
+	}{}
+	for i := range out.Data {
+		byID[out.Data[i].ID] = &out.Data[i]
+	}
+	fast, slow := byID["fast"], byID["slow"]
+	if fast == nil || slow == nil {
+		t.Fatalf("missing entries: %s", w.Body)
+	}
+	if fast.ContextWindow == nil || *fast.ContextWindow != 128000 {
+		t.Fatalf("fast context_window=%v, want 128000", fast.ContextWindow)
+	}
+	if slow.ContextWindow != nil {
+		t.Fatalf("slow context_window=%v, want omitted (nil)", *slow.ContextWindow)
+	}
+	// Raw-body sanity: fast carries the value and is the only entry that does — the
+	// key appears exactly once, so the unset model (slow) omits it entirely (never null/0).
+	body := w.Body.String()
+	if !strings.Contains(body, `"context_window":128000`) {
+		t.Fatalf("fast raw missing value: %s", body)
+	}
+	if n := strings.Count(body, `"context_window"`); n != 1 {
+		t.Fatalf("context_window appears %d times, want 1 (only fast): %s", n, body)
 	}
 }
 

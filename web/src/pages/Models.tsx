@@ -89,6 +89,7 @@ export default function Models() {
           { head: 'Name', cell: (m) => m.name },
           { head: 'Provider', cell: (m) => `${m.provider} · ${m.upstream_model}` },
           { head: '$ / 1M in · out', cell: (m) => `${fromMicros(m.price_input_micros)} · ${fromMicros(m.price_output_micros)}` },
+          { head: 'Context', cell: (m) => (m.context_window != null ? m.context_window.toLocaleString() : '—') },
           ...(writable ? [{ head: 'Credential', cell: (m: Model) => credName(m.credential_id) }] : []),
           // Without models:write the server lists only your enabled, allowed models.
           ...(writable ? [] : [{ head: 'Your access', cell: (m: Model) => (m.access === 'granted' ? 'granted to you' : 'group') }]),

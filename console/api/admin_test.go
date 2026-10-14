@@ -306,6 +306,49 @@ func TestRoutes_DeniedRoles(t *testing.T) {
 	}
 }
 
+func TestModels_ContextWindowRoundTrip(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	cw := int64(128000)
+	// (i) create with a context_window: 201, reads back pointing at 128000
+	created := decodeInto[repo.Model](t, e.as("admin@x.io", "POST", "/console/api/v1/models", map[string]any{
+		"name": "cw", "provider": "openai", "upstream_model": "gpt-4o", "api_base": "http://10.0.0.5:8000/v1",
+		"enabled": true, "price_input_micros": 1, "price_output_micros": 1, "context_window": cw}))
+	if created.ContextWindow == nil || *created.ContextWindow != 128000 {
+		t.Fatalf("create: ContextWindow=%v, want 128000", created.ContextWindow)
+	}
+	// (ii) update it: 200, reads back 64000
+	newCW := int64(64000)
+	updated := decodeInto[repo.Model](t, e.as("admin@x.io", "PUT", "/console/api/v1/models/"+created.ID, map[string]any{
+		"name": "cw", "provider": "openai", "upstream_model": "gpt-4o", "api_base": "http://10.0.0.5:8000/v1",
+		"enabled": true, "price_input_micros": 1, "price_output_micros": 1, "context_window": newCW}))
+	if updated.ContextWindow == nil || *updated.ContextWindow != 64000 {
+		t.Fatalf("update: ContextWindow=%v, want 64000", updated.ContextWindow)
+	}
+	// (iii) update omitting it: full-row replace clears it back to nil
+	omitted := decodeInto[repo.Model](t, e.as("admin@x.io", "PUT", "/console/api/v1/models/"+created.ID, map[string]any{
+		"name": "cw", "provider": "openai", "upstream_model": "gpt-4o", "api_base": "http://10.0.0.5:8000/v1",
+		"enabled": true, "price_input_micros": 1, "price_output_micros": 1}))
+	if omitted.ContextWindow != nil {
+		t.Fatalf("omit: ContextWindow=%v, want nil", *omitted.ContextWindow)
+	}
+	// The non-writer list must still carry the field (user-facing metadata, not redacted).
+	// Re-set it, then check member sees it.
+	e.store.UpdateModel(ctx, created.ID, repo.ModelInput{Name: "cw", Provider: "openai", UpstreamModel: "gpt-4o",
+		APIBase: "http://10.0.0.5:8000/v1", Enabled: true, PriceInputMicros: 1, PriceOutputMicros: 1, ContextWindow: &cw})
+	if b := e.as("member@x.io", "GET", "/console/api/v1/models", nil).Body.String(); !strings.Contains(b, `"context_window":128000`) {
+		t.Fatalf("member does not see context_window: %s", b)
+	}
+	// (iv) a non-positive value is rejected
+	for _, bad := range []any{0, -5} {
+		body := map[string]any{"name": "cw-bad", "provider": "openai", "upstream_model": "gpt-4o",
+			"api_base": "http://10.0.0.5:8000/v1", "enabled": true, "context_window": bad}
+		if w := e.as("admin@x.io", "POST", "/console/api/v1/models", body); w.Code != 400 {
+			t.Fatalf("context_window=%v: %d, want 400", bad, w.Code)
+		}
+	}
+}
+
 func TestModels_RejectsExtraTheRegistryCantLoad(t *testing.T) {
 	e := newTenv(t)
 	for _, extra := range []any{[]any{}, "x", map[string]any{"headers": map[string]any{"X": 1}}} {

@@ -21,8 +21,12 @@ func LoadModels(ctx context.Context, store *repo.Store, v *vault.Vault) ([]*Mode
 		if !r.Enabled {
 			continue
 		}
+		cw := int64(0)
+		if r.ContextWindow != nil {
+			cw = *r.ContextWindow
+		}
 		m := &Model{ID: r.ID, Name: r.Name, Provider: r.Provider, UpstreamModel: r.UpstreamModel, APIBase: r.APIBase,
-			Created: r.CreatedAt.Unix(),
+			Created: r.CreatedAt.Unix(), ContextWindow: cw,
 			Prices: Prices{InputMicros: r.PriceInputMicros, OutputMicros: r.PriceOutputMicros,
 				CacheReadMicros: r.PriceCacheReadMicros, CacheWriteMicros: r.PriceCacheWriteMicros}}
 		if len(r.Extra) > 0 {

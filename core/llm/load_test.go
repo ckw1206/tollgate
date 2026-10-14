@@ -40,6 +40,34 @@ func TestLoadModels_DecryptsAndSkipsDisabled(t *testing.T) {
 	}
 }
 
+// TestLoadModels_ContextWindowCopiesToRuntime: guards the repo-row -> llm.Model copy;
+// without it the value would never reach the registry and /v1/models could not see it.
+func TestLoadModels_ContextWindowCopiesToRuntime(t *testing.T) {
+	s := repo.New(dbtest.New(t))
+	ctx := context.Background()
+	v, _ := vault.New(bytes.Repeat([]byte{1}, 32))
+	i64 := func(x int64) *int64 { return &x }
+	s.CreateModel(ctx, repo.ModelInput{Name: "with-cw", Provider: "openai", UpstreamModel: "m",
+		APIBase: "http://10.0.0.9:8000/v1", Enabled: true, ContextWindow: i64(128000)})
+	s.CreateModel(ctx, repo.ModelInput{Name: "no-cw", Provider: "openai", UpstreamModel: "m",
+		APIBase: "http://10.0.0.9:8000/v1", Enabled: true})
+
+	ms, err := llm.LoadModels(ctx, s, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*llm.Model{}
+	for _, m := range ms {
+		got[m.Name] = m
+	}
+	if got["with-cw"] == nil || got["with-cw"].ContextWindow != 128000 {
+		t.Fatalf("with-cw: %+v, want ContextWindow 128000", got["with-cw"])
+	}
+	if got["no-cw"] == nil || got["no-cw"].ContextWindow != 0 {
+		t.Fatalf("no-cw: %+v, want ContextWindow 0", got["no-cw"])
+	}
+}
+
 // Endpoint resolution: credential.api_base ▸ provider default ("" here); the model's own
 // api_base counts without a credential, or (legacy) when its credential has none.
 func TestLoadModels_EndpointFromCredential(t *testing.T) {
