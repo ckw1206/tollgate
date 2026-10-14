@@ -51,6 +51,16 @@ export const usd = (nanos: number) => {
   const d = nanos / 1e9
   return '$' + (d !== 0 && Math.abs(d) < 0.01 ? d.toFixed(6) : d.toFixed(2))
 }
+
+// Tokens: humanized K/M/B (contract C3). One decimal via toFixed(1), then strip a
+// trailing ".0"; thresholds 1e3/1e6/1e9. toFixed carries at the boundaries
+// (999999 -> "1000.0" -> "1000K") — the test pins that.
+export const fmtTokens = (n: number) => {
+  if (n < 1e3) return String(n)
+  if (n < 1e6) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K'
+  if (n < 1e9) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'
+  return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B'
+}
 export const toNanos = (dollars: string) => Math.round(parseFloat(dollars || '0') * 1e9)
 export const fromNanos = (nanos: number) => String(nanos / 1e9)
 export const toMicros = (dollars: string) => Math.round(parseFloat(dollars || '0') * 1e6)
