@@ -100,7 +100,7 @@ func (s *Server) updateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "group.update", "groups", id, before, after)
-	n, err := s.Store.CountKeysOutsideAccess(r.Context(), id, "")
+	n, err := s.Store.CountKeysOutsideAccess(r.Context(), after.ID, "") // canonical: the path id may be uppercase
 	if err != nil {
 		storeErr(w, err)
 		return

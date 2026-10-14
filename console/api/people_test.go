@@ -150,6 +150,11 @@ func TestGroups_ModelsReturnAffectedKeysAndAudit(t *testing.T) {
 	if len(entries) != 1 || json.Unmarshal(entries[0].Details, &d) != nil || d.Before.Models == nil || len(d.Before.Models) != 0 || !slices.Equal(d.After.Models, []string{"b"}) {
 		t.Fatalf("audit: %+v", entries)
 	}
+	// the path id may be any spelling Postgres accepts; the count must not depend on it
+	upper := e.as("admin@x.io", "PUT", "/console/api/v1/groups/"+strings.ToUpper(e.group.ID), map[string]any{"name": "default", "budget_type": "unlimited", "models": []string{"b"}})
+	if g := decodeInto[groupWithKeys](t, upper); g.AffectedKeys != 1 {
+		t.Fatalf("uppercase id: %s", upper.Body)
+	}
 	// an extra grant covers the key again
 	w := e.as("admin@x.io", "PUT", "/console/api/v1/users/"+e.member.ID, map[string]any{"extra_models": []string{"a"}})
 	if u := decodeInto[userWithKeys](t, w); w.Code != 200 || u.AffectedKeys != 0 {
@@ -234,9 +239,11 @@ func TestUsers_CannotChangeOwnModelAccess(t *testing.T) {
 	accessModels(e)
 	other, _ := e.store.CreateGroup(context.Background(), repo.GroupInput{Name: "other", BudgetType: "unlimited"})
 	self := "/console/api/v1/users/" + e.admin.ID
-	for _, body := range []map[string]any{{"extra_models": []string{"a"}}, {"group_id": other.ID}} {
-		if w := e.as("admin@x.io", "PUT", self, body); w.Code != 400 {
-			t.Fatalf("self %v: %d", body, w.Code)
+	for _, path := range []string{self, "/console/api/v1/users/" + strings.ToUpper(e.admin.ID)} { // any id spelling Postgres accepts is still you
+		for _, body := range []map[string]any{{"extra_models": []string{"a"}}, {"group_id": other.ID}, {"role": "viewer"}} {
+			if w := e.as("admin@x.io", "PUT", path, body); w.Code != 400 {
+				t.Fatalf("self %s %v: %d", path, body, w.Code)
+			}
 		}
 	}
 	// unchanged values are fine, e.g. a full row save
