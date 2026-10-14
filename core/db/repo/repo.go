@@ -54,27 +54,52 @@ func (l Limits) EffectiveSpend(now time.Time) int64 {
 	return l.SpendNanos
 }
 
+// windowSentinelStart is the fixed window identity for total/unlimited
+// budgets: the epoch. It is stable for the lifetime of the scope, which lets
+// the one-shot notify marker work for total budgets (A4) while never expiring.
+var windowSentinelStart = time.Unix(0, 0).UTC()
+
 // WindowStart reports the start of the window a record should be charged to,
-// or nil for total/unlimited budgets and when there is no window (nil
-// BudgetResetAt). An expired daily/monthly window starts at the reset instant
-// itself; an active one starts one period before the reset.
-func (l Limits) WindowStart(now time.Time) *time.Time {
-	if !l.isWindowed() || l.BudgetResetAt == nil {
+// or nil when a windowed budget has no window (nil BudgetResetAt).
+// total/unlimited budgets use the fixed epoch sentinel so every record counts
+// and crossings can fire (A4) while the window never expires.
+//
+// The period is subtracted as a WALL-CLOCK in the SERVER's timezone (loc, from
+// server_settings.timezone), NOT in the scanned instant's Location (UTC in the
+// distroless image): next_budget_reset defines windows in the server timezone,
+// so subtracting a period as an elapsed duration in UTC drifts 1-3 days for
+// UTC+ monthly windows and an hour across DST for daily windows (A2). loc is
+// only the arithmetic frame — the returned instants are absolute times
+// comparable to stored TIMESTAMPTZ values.
+//
+// An expired daily/monthly window (reset instant in the past) starts at the
+// reset instant itself: the fresh window begins exactly where the expired one
+// ended, and a later write in that fresh window derives the same start once
+// the counter rolls (the next reset minus one period in the server timezone).
+func (l Limits) WindowStart(now time.Time, loc *time.Location) *time.Time {
+	if !l.isWindowed() {
+		c := windowSentinelStart
+		return &c
+	}
+	if l.BudgetResetAt == nil {
 		return nil
 	}
 	start := *l.BudgetResetAt
 	if !now.Before(start) {
 		return l.BudgetResetAt // expired: the new window began at the reset instant
 	}
+	local := start.In(loc)
 	if l.BudgetType == "monthly" {
-		start = start.AddDate(0, -1, 0)
+		local = local.AddDate(0, -1, 0)
 	} else {
-		start = start.AddDate(0, 0, -1)
+		local = local.AddDate(0, 0, -1)
 	}
-	return &start
+	return &local
 }
 
 // OverBudget reports whether the current window's spend has reached the cap.
+// Only absolute instant comparisons are involved (no calendar math), so the
+// server timezone plays no role here.
 func (l Limits) OverBudget(now time.Time) bool {
 	return l.BudgetType != "unlimited" && l.EffectiveSpend(now) >= l.BudgetNanos
 }
