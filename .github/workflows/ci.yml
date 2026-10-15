@@ -35,6 +35,8 @@ jobs:
           go-version: '1.26' # latest patch, like the Dockerfile's golang:1.26
           check-latest: true
       - run: make web
+      - run: npm test
+        working-directory: web
       - run: go vet ./...
       - run: make test TESTFLAGS=-race
 
