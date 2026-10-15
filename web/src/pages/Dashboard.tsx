@@ -1,25 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { dash, fmtTokens, usd, when } from '../api'
+import { dash, fmtTokens, short, usd, when } from '../api'
 import { useAuth } from '../auth'
 import GetStarted from '../components/GetStarted'
 import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Table, useLoad } from '../components/ui'
-import type { ApiKey, SpendLog, SpendRow } from '../types'
+import { fmtBucket, isDay, PER_UNIT, PER_WORD, RANGES, spanOf } from '../range'
+import type { Granularity, Range } from '../range'
+import type { ApiKey, Group, SpendLog, SpendRow, User } from '../types'
 
 type Spend = { rows: SpendRow[] }
 type Metric = 'tokens' | 'requests' | 'cost'
 
-const DAY = 86_400_000
 const fmt = new Intl.NumberFormat()
-const RANGES = [
-  { value: 'today', label: 'Today' },
-  { value: '7d', label: 'Last 7 days' },
-  { value: '30d', label: 'Last 30 days' },
-  { value: '90d', label: 'Last 90 days' },
-  { value: 'custom', label: 'Custom…' },
-] as const
-type Range = (typeof RANGES)[number]['value']
 const METRICS: { value: Metric; label: string }[] = [{ value: 'tokens', label: 'Tokens' }, { value: 'requests', label: 'Requests' }, { value: 'cost', label: 'Cost' }]
 const SHOW = [10, 25, 50, 100]
 const SHOW_KEY = 'tollgate.recent'
@@ -38,56 +31,8 @@ const storedShow = () => {
   }
 }
 
-// Calendar days are YYYY-MM-DD in the server timezone, the same buckets as /spend?group_by=day.
-// Years before 2000 are rejected (see DayInput), and so are impossible days (a hand-edited ?from=).
-const isDay = (s: string | null): s is string =>
-  !!s && /^2\d{3}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s
-const dayIn = (t: number, tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(t)
-const nextDay = (d: string) => new Date(Date.parse(d) + DAY).toISOString().slice(0, 10)
-const fmtDay = (d: string) => new Date(Date.parse(d)).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' })
-
-// midnight: the instant 00:00 starts on day d in tz. The zone's offset is measured at the
-// first guess and again at the result, so a DST change on that day still lands on 00:00.
-function midnight(d: string, tz: string) {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
-  const offset = (t: number) => {
-    const p = Object.fromEntries(parts.formatToParts(t).map((x) => [x.type, x.value]))
-    return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(t / 1000) * 1000
-  }
-  const utc = Date.parse(d)
-  return utc - offset(utc - offset(utc))
-}
-
-// span: what ?range= (and, for custom, ?from=&to=) means right now. Today starts at midnight in the
-// server timezone; N days is a rolling N×24h; custom runs from 00:00 on `from` to the end of `to`.
-function spanOf(range: Range, pFrom: string | null, pTo: string | null, tz: string) {
-  const t = Date.now()
-  const now = Math.floor(t / 60_000) * 60_000 + 60_000 // the next whole minute: a stable URL
-  const today = dayIn(t, tz) // from the real clock: in a day's last minute, now is already tomorrow
-  const n = parseInt(range)
-  let from = now - n * DAY
-  let to = now
-  let label = `Last ${n} days`
-  let phrase = `in the last ${n} days`
-  if (range === 'today') {
-    from = midnight(today, tz)
-    label = 'Today'
-    phrase = 'today'
-  } else if (range === 'custom') {
-    const upToToday = (d: string) => (d < today ? d : today) // no spend in the future; bounds the day list
-    let a = upToToday(isDay(pFrom) ? pFrom : dayIn(now - 30 * DAY, tz))
-    let b = upToToday(isDay(pTo) ? pTo : today)
-    if (a > b) [a, b] = [b, a]
-    from = midnight(a, tz)
-    to = midnight(nextDay(b), tz)
-    label = a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`
-    phrase = a === b ? `on ${fmtDay(a)}` : `between ${fmtDay(a)} and ${fmtDay(b)}`
-  }
-  const days: string[] = []
-  for (let d = dayIn(from, tz), last = dayIn(to - 1, tz); d <= last; d = nextDay(d)) days.push(d)
-  const q = new URLSearchParams({ from: new Date(from).toISOString(), to: new Date(to).toISOString() }).toString()
-  return { q, days, label, phrase }
-}
+// isDay, day labels, and the span model (range → window + granularity + bucket labels) live in
+// ../range.ts; the buckets must match the SQL labels in core/db/repo/spend.go exactly (tested).
 
 // DayInput: a custom-range date field. Typing a year passes through 0002, 0020 and 0202, so the
 // field keeps its own draft and only whole days from 2000 on reach the URL; blur drops a bad draft.
@@ -133,22 +78,47 @@ function Panel({ title, actions, children }: { title: string; actions?: React.Re
 }
 
 // TopModels: Bars = up to 8 models from group_by=model, bar = share of the leader, % = share of
-// the total. Trend = the top 5 as daily lines from group_by=model,day, fetched only when shown.
-function TopModels({ rows, emptyText, q, days }: { rows: SpendRow[] | null; emptyText: string; q: string; days: string[] }) {
+// the total. Trend = the top 5 as per-bucket lines from group_by=model,<granularity>, fetched
+// only when shown. Scope (admins): Everyone or one user — user_id is appended to this panel's
+// fetches only; the stat cards and the spend chart stay global.
+function TopModels({ rows, emptyText, span, granularity, can, users }: { rows: SpendRow[] | null; emptyText: string; span: ReturnType<typeof spanOf>; granularity: Granularity; can: boolean; users: User[] | null }) {
   const [view, setView] = useState<'bars' | 'trend'>('bars')
   const [metric, setMetric] = useState<Metric>('cost')
-  const trend = useLoad<Spend>(view === 'trend' ? `/console/api/v1/spend?group_by=model,day&${q}` : null)
+  const [scope, setScope] = useState<'all' | 'user'>('all')
+  const [userId, setUserId] = useState('')
+  // A user removed from the org while the toggle was open: fall back to everyone.
+  const scoped = scope === 'user' && (users ?? []).some((u) => u.id === userId)
+  const extra = scoped ? `&user_id=${userId}` : ''
+  const trend = useLoad<Spend>(view === 'trend' ? `/console/api/v1/spend?group_by=${span.modelGroupBy}&${span.q}${extra}` : null)
   // Free models that served requests stay listed (at $0.00) under Cost.
   const sorted = useMemo(() => (rows ?? []).filter((r) => r.requests > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [rows, metric])
   const total = sorted.reduce((s, r) => s + metricOf(r, metric), 0)
   const leader = sorted.length ? metricOf(sorted[0]!, metric) : 0
   return (
     <Panel
-      title="Top models"
+      title={scoped ? `Top models · ${(users ?? []).find((u) => u.id === userId)?.email ?? ''}` : 'Top models'}
       actions={
         <div className="flex flex-wrap gap-2">
           <Segmented label="View" value={view} onChange={setView} options={[{ value: 'bars', label: 'Bars' }, { value: 'trend', label: 'Trend' }]} />
           <Segmented label="Rank by" value={metric} onChange={setMetric} options={METRICS} />
+          {can && (
+            <Segmented
+              label="Scope"
+              value={scoped ? 'user' : 'all'}
+              onChange={(v) => {
+                setScope(v)
+                if (v === 'user' && !(users ?? []).some((u) => u.id === userId) && users && users.length) setUserId(users[0]!.id)
+              }}
+              options={[{ value: 'all', label: 'Everyone' }, { value: 'user', label: 'User…' }]}
+            />
+          )}
+          {can && scoped && (
+            <select aria-label="Top models user" className={controlCls + ' h-7 bg-background text-xs'} value={userId} onChange={(e) => setUserId(e.target.value)}>
+              {(users ?? []).map((u) => (
+                <option key={u.id} value={u.id}>{u.email}</option>
+              ))}
+            </select>
+          )}
         </div>
       }
     >
@@ -159,7 +129,7 @@ function TopModels({ rows, emptyText, q, days }: { rows: SpendRow[] | null; empt
       ) : view === 'trend' ? (
         <>
           <ErrorText>{trend.error}</ErrorText>
-          <Trend top={sorted.slice(0, 5)} total={total} metric={metric} rows={trend.data?.rows ?? (trend.error ? [] : null)} days={days} />
+          <Trend top={sorted.slice(0, 5)} total={total} metric={metric} rows={trend.data?.rows ?? (trend.error ? [] : null)} buckets={span.buckets} granularity={granularity} />
         </>
       ) : (
         <ol className="flex flex-col">
@@ -184,32 +154,32 @@ function TopModels({ rows, emptyText, q, days }: { rows: SpendRow[] | null; empt
         </ol>
       )}
       <p className="mt-3 text-xs text-muted-foreground">
-        {view === 'trend' ? `Top 5 · daily ${metric} · legend = range total` : 'bar = share of the leader · % = share of total'}
+        {view === 'trend' ? `Top 5 · ${PER_WORD[granularity]} ${metric} · legend = range total` : 'bar = share of the leader · % = share of total'}
       </p>
     </Panel>
   )
 }
 
-type Point = { day: string; v: number[] }
+type Point = { bucket: string; v: number[] }
 
-// Trend: one line per model over every day of the range (missing days are 0), the highest
-// single-day value top-left, 4 date ticks, then a legend row per model with its range total.
-function Trend({ top, total, metric, rows, days }: { top: SpendRow[]; total: number; metric: Metric; rows: SpendRow[] | null; days: string[] }) {
+// Trend: one line per model over every bucket of the range (missing buckets are 0), the highest
+// single-bucket value top-left, 4 bucket ticks, then a legend row per model with its range total.
+function Trend({ top, total, metric, rows, buckets, granularity }: { top: SpendRow[]; total: number; metric: Metric; rows: SpendRow[] | null; buckets: string[]; granularity: Granularity }) {
   if (rows === null) return <Skeleton className="h-[150px] w-full" />
   const at = new Map(rows.map((r) => [`${r.bucket}\n${r.day}`, metricOf(r, metric)]))
-  const data: Point[] = days.map((d) => ({ day: d, v: top.map((m) => at.get(`${m.bucket}\n${d}`) ?? 0) }))
+  const data: Point[] = buckets.map((b) => ({ bucket: b, v: top.map((m) => at.get(`${m.bucket}\n${b}`) ?? 0) }))
   const max = Math.max(0, ...data.flatMap((p) => p.v))
-  const ceil = (max || 1) / 0.96 // the busiest day peaks just under the top gridline
-  const ticks = [...new Set([0, 1 / 3, 2 / 3, 1].map((f) => days[Math.round(f * (days.length - 1))]!))]
+  const ceil = (max || 1) / 0.96 // the busiest bucket peaks just under the top gridline
+  const ticks = [...new Set([0, 1 / 3, 2 / 3, 1].map((f) => buckets[Math.round(f * (buckets.length - 1))]!))]
   return (
     <div className="flex flex-col gap-1.5">
       <div className="relative h-[150px] border-b border-border">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
-            <XAxis dataKey="day" hide />
+            <XAxis dataKey="bucket" hide />
             <YAxis hide domain={[0, ceil]} ticks={[0, 1, 2, 3].map((i) => (ceil * i) / 3)} />
-            <Tooltip formatter={(v: number) => showMetric(v, metric)} labelFormatter={fmtDay} contentStyle={tooltipStyle} />
+            <Tooltip formatter={(v: number) => showMetric(v, metric)} labelFormatter={(b) => fmtBucket(String(b), granularity)} contentStyle={tooltipStyle} />
             {top.map((m, i) => (
               <Line
                 key={m.bucket}
@@ -218,15 +188,15 @@ function Trend({ top, total, metric, rows, days }: { top: SpendRow[]; total: num
                 dataKey={(p: Point) => p.v[i]}
                 stroke={`var(--chart-${i + 1})`}
                 strokeWidth={2}
-                dot={days.length === 1 ? { r: 3, fill: `var(--chart-${i + 1})` } : false}
+                dot={buckets.length === 1 ? { r: 3, fill: `var(--chart-${i + 1})` } : false}
               />
             ))}
           </LineChart>
         </ResponsiveContainer>
-        <span className="absolute -top-0.5 left-0 bg-card pr-1 text-[11px] text-muted-foreground">{showMetric(max, metric)} / day</span>
+        <span className="absolute -top-0.5 left-0 bg-card pr-1 text-[11px] text-muted-foreground">{showMetric(max, metric)} / {PER_UNIT[granularity]}</span>
       </div>
       <div className="flex justify-between text-[11px] text-muted-foreground">
-        {ticks.map((d) => <span key={d}>{fmtDay(d)}</span>)}
+        {ticks.map((b) => <span key={b}>{fmtBucket(b, granularity)}</span>)}
       </div>
       <div className="flex flex-col">
         {top.map((m, i) => {
@@ -245,6 +215,51 @@ function Trend({ top, total, metric, rows, days }: { top: SpendRow[]; total: num
   )
 }
 
+// TopBoard: the Top users / Top groups board (admins). Same bar semantics as Top models — up to
+// 8 rows, bar = share of the leader, % = share of the total — with its own "Rank by". Rows are
+// group_by=user|group; ids resolve to an email/group name from the /users and /groups lists
+// (short(id) while those load or for an id that no longer exists).
+function TopBoard({ title, rows, emptyText, names, loading }: { title: string; rows: SpendRow[] | null; emptyText: string; names: Map<string, string> | null; loading: boolean }) {
+  const [metric, setMetric] = useState<Metric>('cost')
+  const sorted = useMemo(() => (rows ?? []).filter((r) => r.requests > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [rows, metric])
+  const total = sorted.reduce((s, r) => s + metricOf(r, metric), 0)
+  const leader = sorted.length ? metricOf(sorted[0]!, metric) : 0
+  return (
+    <Panel
+      title={title}
+      actions={<Segmented label={`Rank by ${title}`} value={metric} onChange={setMetric} options={METRICS} />}
+    >
+      {rows === null || loading ? (
+        <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" />)}</div>
+      ) : sorted.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
+      ) : (
+        <ol className="flex flex-col">
+          {sorted.slice(0, 8).map((r, i) => {
+            const v = metricOf(r, metric)
+            return (
+              <li key={r.bucket} className="grid grid-cols-[20px_minmax(0,1fr)_96px] items-center gap-2.5 border-b border-border py-[7px]">
+                <code className="font-mono text-xs text-muted-foreground">{i + 1}</code>
+                <div className="flex min-w-0 flex-col gap-[5px]">
+                  <div className="flex justify-between gap-2 text-[13px]">
+                    <span className="truncate font-medium" title={r.bucket}>{names?.get(r.bucket) ?? short(r.bucket)}</span>
+                    <span className="whitespace-nowrap text-xs text-muted-foreground">{pct(v, total)}</span>
+                  </div>
+                  <div className="h-1 bg-muted">
+                    <div className="h-1 bg-primary" style={{ width: `${leader ? Math.max((v / leader) * 100, v ? 2 : 0) : 0}%` }} />
+                  </div>
+                </div>
+                <span className="text-right text-[13px] tabular-nums">{showMetric(v, metric)}</span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+      <p className="mt-3 text-xs text-muted-foreground">bar = share of the leader · % = share of total</p>
+    </Panel>
+  )
+}
+
 export default function Dashboard() {
   const { me, can } = useAuth()
   const [params, setParams] = useSearchParams()
@@ -258,7 +273,7 @@ export default function Dashboard() {
     }
   }, [params, setParams])
 
-  // The range lives in the URL (?range=30d; custom adds from/to days) and drives every panel.
+  // The range lives in the URL (?range=90d; custom adds from/to days) and drives every panel.
   const tz = me?.server.timezone || 'UTC'
   const rawRange = params.get('range')
   const range: Range = RANGES.find((r) => r.value === rawRange)?.value ?? '30d'
@@ -274,20 +289,30 @@ export default function Dashboard() {
     setParams(p, { replace: true })
   }
   const pickRange = (r: Range) =>
-    setRange(r === 'custom' ? { range: r, from: span.days[0]!, to: span.days[span.days.length - 1]! } : { range: r, from: null, to: null })
+    setRange(r === 'custom' ? { range: r, from: span.fromDay, to: span.toDay } : { range: r, from: null, to: null })
 
   const [show, setShow] = useState(storedShow)
-  const daily = useLoad<Spend>(`/console/api/v1/spend?group_by=day&${span.q}`)
+  const daily = useLoad<Spend>(`/console/api/v1/spend?group_by=${span.groupBy}&${span.q}`)
   const byModel = useLoad<Spend>(`/console/api/v1/spend?group_by=model&${span.q}`)
   const recent = useLoad<SpendLog[]>(`/console/api/v1/spend/requests?${span.q}&limit=${show}`)
+
+  // Admin-only: the Top users / Top groups boards and the Top models scope toggle. The users
+  // list serves both the boards' name resolution and the toggle's dropdown (contract C5/C6).
+  const admin = can('spend:read_all')
+  const byUser = useLoad<Spend>(admin ? `/console/api/v1/spend?group_by=user&${span.q}` : null)
+  const byGroup = useLoad<Spend>(admin ? `/console/api/v1/spend?group_by=group&${span.q}` : null)
+  const users = useLoad<User[]>(admin ? '/console/api/v1/users' : null)
+  const groups = useLoad<Group[]>(admin ? '/console/api/v1/groups' : null)
+  const userNames = useMemo(() => (users.data ? new Map(users.data.map((u) => [u.id, u.email])) : null), [users.data])
+  const groupNames = useMemo(() => (groups.data ? new Map(groups.data.map((g) => [g.id, g.name])) : null), [groups.data])
 
   const rows = daily.data?.rows ?? null
   const sum = (f: (r: SpendRow) => number) => (rows ? rows.reduce((s, r) => s + f(r), 0) : null)
   const spend = sum((r) => r.cost_nanos)
   const requests = sum((r) => r.requests)
   const tokens = sum((r) => r.input_tokens + r.output_tokens)
-  const byDay = new Map((rows ?? []).map((r) => [r.bucket, r.cost_nanos]))
-  const chart = span.days.map((d) => ({ day: d, usd: (byDay.get(d) ?? 0) / 1e9 }))
+  const byBucket = new Map((rows ?? []).map((r) => [r.bucket, r.cost_nanos]))
+  const chart = span.buckets.map((b) => ({ bucket: b, usd: (byBucket.get(b) ?? 0) / 1e9 }))
 
   // Empty dashboard without the checklist (members and viewers): a next step, never a dead end.
   // "Yet" copy only when nothing has ever been recorded; a quiet range says "in this period".
@@ -309,8 +334,8 @@ export default function Dashboard() {
       <PageHeader title={can('spend:read_all') ? 'Usage — everyone' : 'Your usage'}>
         {range === 'custom' && (
           <>
-            <DayInput label="From" value={span.days[0]!} max={span.days[span.days.length - 1]} onCommit={(d) => setRange({ from: d })} />
-            <DayInput label="To" value={span.days[span.days.length - 1]!} min={span.days[0]} onCommit={(d) => setRange({ to: d })} />
+            <DayInput label="From" value={span.fromDay} max={span.toDay} onCommit={(d) => setRange({ from: d })} />
+            <DayInput label="To" value={span.toDay} min={span.fromDay} onCommit={(d) => setRange({ to: d })} />
           </>
         )}
         <select aria-label="Range" className={controlCls + ' h-9 text-sm'} value={range} onChange={(e) => pickRange(e.target.value as Range)}>
@@ -330,7 +355,7 @@ export default function Dashboard() {
         </p>
       )}
       <div className="mb-4">
-        <ErrorText>{daily.error || byModel.error || recent.error}</ErrorText>
+        <ErrorText>{daily.error || byModel.error || recent.error || (admin ? byUser.error || byGroup.error : '')}</ErrorText>
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Spend" value={spend == null ? null : usd(spend)} />
@@ -338,7 +363,7 @@ export default function Dashboard() {
         <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="Spend per day (USD)">
+        <Panel title={`Spend per ${span.granularity} (USD)`}>
           <div className="h-[240px]">
             {rows === null ? (
               <Skeleton className="h-full w-full" />
@@ -348,18 +373,24 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                   <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
-                  <XAxis dataKey="day" tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" />
+                  <XAxis dataKey="bucket" tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" tickFormatter={(b) => fmtBucket(String(b), span.granularity)} minTickGap={24} />
                   <YAxis tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" width={56} />
-                  <Tooltip formatter={(v: number) => usd(Math.round(v * 1e9))} contentStyle={tooltipStyle} />
-                  {/* A one-day range (Today) is a single point: give it a dot so it shows. */}
+                  <Tooltip formatter={(v: number) => usd(Math.round(v * 1e9))} labelFormatter={(b) => fmtBucket(String(b), span.granularity)} contentStyle={tooltipStyle} />
+                  {/* A single-bucket range (e.g. a one-day custom) is one point: give it a dot. */}
                   <Line type="monotone" dataKey="usd" stroke="var(--primary)" strokeWidth={2} dot={chart.length === 1 ? { r: 3, fill: 'var(--primary)' } : false} />
                 </LineChart>
               </ResponsiveContainer>
             )}
           </div>
         </Panel>
-        <TopModels rows={byModel.data?.rows ?? (byModel.error ? [] : null)} emptyText={neverUsed ? 'No models used yet.' : 'No requests in this period.'} q={span.q} days={span.days} />
+        <TopModels rows={byModel.data?.rows ?? (byModel.error ? [] : null)} emptyText={neverUsed ? 'No models used yet.' : 'No requests in this period.'} span={span} granularity={span.granularity} can={admin} users={users.data} />
       </div>
+      {admin && (
+        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <TopBoard title="Top users" rows={byUser.data?.rows ?? (byUser.error ? [] : null)} emptyText={neverUsed ? 'No users yet.' : 'No requests in this period.'} names={userNames} loading={users.data === null} />
+          <TopBoard title="Top groups" rows={byGroup.data?.rows ?? (byGroup.error ? [] : null)} emptyText={neverUsed ? 'No groups yet.' : 'No requests in this period.'} names={groupNames} loading={groups.data === null} />
+        </div>
+      )}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-medium text-muted-foreground">
           Recent requests <span className="font-normal">· {span.label}</span>
