@@ -79,15 +79,14 @@ function Panel({ title, actions, children }: { title: string; actions?: React.Re
 
 // TopModels: Bars = up to 8 models from group_by=model, bar = share of the leader, % = share of
 // the total. Trend = the top 5 as per-bucket lines from group_by=model,<granularity>, fetched
-// only when shown. Scope (admins): Everyone or one user — user_id is appended to this panel's
-// fetches only; the stat cards and the spend chart stay global.
+// only when shown. Scope (admins): one dropdown, Everyone or one user — user_id is appended to
+// this panel's fetches only; the stat cards and the spend chart stay global.
 function TopModels({ rows, emptyText, span, granularity, can, users }: { rows: SpendRow[] | null; emptyText: string; span: ReturnType<typeof spanOf>; granularity: Granularity; can: boolean; users: User[] | null }) {
   const [view, setView] = useState<'bars' | 'trend'>('bars')
   const [metric, setMetric] = useState<Metric>('cost')
-  const [scope, setScope] = useState<'all' | 'user'>('all')
-  const [userId, setUserId] = useState('')
-  // A user removed from the org while the toggle was open: fall back to everyone.
-  const scoped = scope === 'user' && (users ?? []).some((u) => u.id === userId)
+  const [userId, setUserId] = useState('') // '' = everyone
+  // A user removed from the org while picked: fall back to everyone.
+  const scoped = userId !== '' && (users ?? []).some((u) => u.id === userId)
   const extra = scoped ? `&user_id=${userId}` : ''
   const trend = useLoad<Spend>(view === 'trend' ? `/console/api/v1/spend?group_by=${span.modelGroupBy}&${span.q}${extra}` : null)
   // Scoped, the bars (and the trend's top 5) rank that user's models, not the global rows.
@@ -99,24 +98,15 @@ function TopModels({ rows, emptyText, span, granularity, can, users }: { rows: S
   const leader = sorted.length ? metricOf(sorted[0]!, metric) : 0
   return (
     <Panel
-      title={scoped ? `Top models · ${(users ?? []).find((u) => u.id === userId)?.email ?? ''}` : 'Top models'}
+      title="Top models"
       actions={
         <div className="flex flex-wrap gap-2">
           <Segmented label="View" value={view} onChange={setView} options={[{ value: 'bars', label: 'Bars' }, { value: 'trend', label: 'Trend' }]} />
           <Segmented label="Rank by" value={metric} onChange={setMetric} options={METRICS} />
+          {/* One always-present, fixed-width control: picking a user never reflows the header. */}
           {can && (
-            <Segmented
-              label="Scope"
-              value={scoped ? 'user' : 'all'}
-              onChange={(v) => {
-                setScope(v)
-                if (v === 'user' && !(users ?? []).some((u) => u.id === userId) && users && users.length) setUserId(users[0]!.id)
-              }}
-              options={[{ value: 'all', label: 'Everyone' }, { value: 'user', label: 'User…' }]}
-            />
-          )}
-          {can && scoped && (
-            <select aria-label="Top models user" className={controlCls + ' h-7 bg-background text-xs'} value={userId} onChange={(e) => setUserId(e.target.value)}>
+            <select aria-label="Top models scope" className={controlCls + ' h-7 w-40 bg-background text-xs'} value={scoped ? userId : ''} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">Everyone</option>
               {(users ?? []).map((u) => (
                 <option key={u.id} value={u.id}>{u.email}</option>
               ))}
@@ -231,7 +221,7 @@ function TopBoard({ title, rows, emptyText, names }: { title: string; rows: Spen
   return (
     <Panel
       title={title}
-      actions={<Segmented label={`Rank by ${title}`} value={metric} onChange={setMetric} options={METRICS} />}
+      actions={<Segmented label={`${title}: rank by`} value={metric} onChange={setMetric} options={METRICS} />}
     >
       {rows === null ? (
         <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" />)}</div>

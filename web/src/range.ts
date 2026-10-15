@@ -177,14 +177,11 @@ export function spanOf(range: Range, pFrom: string | null, pTo: string | null, t
     phrase = `in the last ${n} days`
   } else if (range === '1y') {
     granularity = 'month'
-    // Rolling 12 months by date (not month-aligned): the window [same date last year, end of
-    // today) carries partial first and last months, so the buckets run 13 labels — 2025-10 …
-    // 2026-10 for now in October 2026 (contract C4: both endpoints inclusive).
+    // From the 1st of this month last year to the end of today (plan C4): 13 labels, 2025-10 …
+    // 2026-10 for now in October 2026. Month-aligned so the first bucket is a whole month — a
+    // same-date start made it a partial month that charted as a fake ramp-up.
     const p = utcParts(t, tz)
-    const back = p.m - 12
-    const y = p.y + (back < 1 ? -1 : 0)
-    const m = back < 1 ? back + 12 : back
-    from = midnight(`${y}-${pad(m)}-${pad(p.d)}`, tz)
+    from = midnight(`${p.y - 1}-${pad(p.m)}-01`, tz)
     to = midnight(nextDay(dayIn(t, tz)), tz)
     label = 'Last year'
     phrase = 'over the last year'

@@ -68,6 +68,7 @@ describe('spanOf — unified range model', () => {
     const s = spanOf('1y', null, null, UTC, NOW)
     expect(s.granularity).toBe('month')
     expect(s.buckets).toEqual(['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'])
+    expect(s.fromDay).toBe('2025-10-01') // month-aligned: the first bucket is a whole month
   })
 
   it('3y: the last three calendar years', () => {
