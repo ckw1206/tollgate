@@ -158,13 +158,13 @@ export function spanOf(range: Range, pFrom: string | null, pTo: string | null, t
   const t = Math.floor(now / 60_000) * 60_000 + 60_000 // the next whole minute: a stable URL
   let from: number, to: number, label: string, phrase: string, granularity: Granularity
   if (range === '24h') {
-    // H = the start of the local hour containing now. The window is [H−24h, H): exactly 24 UTC
-    // hours, so the last bucket is the hour containing now−1h; on a spring-forward day one local
-    // label is skipped and on a fall-back day two UTC hours share a label (deduped below).
+    // H = the start of the local hour containing now. The window is [H−23h, H+1h): exactly 24 UTC
+    // hours ending with the current (partial) hour, so the newest spend shows; on a spring-forward
+    // day one local label is skipped and on a fall-back day two UTC hours share a label (deduped below).
     const p = utcParts(t, tz)
     const h0 = localToUtc(p.y, p.m, p.d, p.h, 0, tz)
-    from = h0 - 24 * HOUR
-    to = h0
+    from = h0 - 23 * HOUR
+    to = h0 + HOUR
     granularity = 'hour'
     label = 'Last 24 hours'
     phrase = 'in the last 24 hours'

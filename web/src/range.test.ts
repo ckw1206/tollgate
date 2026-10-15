@@ -16,11 +16,12 @@ describe('spanOf — unified range model', () => {
     expect(s.granularity).toBe('hour')
     expect(s.groupBy).toBe('hour')
     expect(s.modelGroupBy).toBe('model,hour')
-    // now = 15:30Z = 11:30 local (EDT): window [Oct 13 11:00, Oct 14 11:00) local.
+    // now = 15:30Z = 11:30 local (EDT): window [Oct 13 12:00, Oct 14 12:00) local — the
+    // current hour is the last bucket, so a request made a minute ago is on the page.
     expect(s.buckets.length).toBe(24)
-    expect(s.buckets[0]).toBe('2026-10-13T11')
-    expect(s.buckets[23]).toBe('2026-10-14T10')
-    expect(s.q).toBe('from=2026-10-13T15%3A00%3A00.000Z&to=2026-10-14T15%3A00%3A00.000Z')
+    expect(s.buckets[0]).toBe('2026-10-13T12')
+    expect(s.buckets[23]).toBe('2026-10-14T11')
+    expect(s.q).toBe('from=2026-10-13T16%3A00%3A00.000Z&to=2026-10-14T16%3A00%3A00.000Z')
   })
 
   it('24h across a spring-forward skips the nonexistent local hour', () => {

@@ -382,7 +382,7 @@ const spendMonth = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server
 // spendYear buckets by year in the server timezone (label: YYYY).
 const spendYear = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY')`
 
-var ErrGroupBy = errors.New("group_by must be hour, day, week, month, year, model, key, user, group, or model,day")
+var ErrGroupBy = errors.New("group_by must be hour, day, week, month, year, model, key, user, group, or model,<hour|day|week|month|year>")
 
 func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, error) {
 	bucket := map[string]string{

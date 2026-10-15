@@ -90,8 +90,11 @@ function TopModels({ rows, emptyText, span, granularity, can, users }: { rows: S
   const scoped = scope === 'user' && (users ?? []).some((u) => u.id === userId)
   const extra = scoped ? `&user_id=${userId}` : ''
   const trend = useLoad<Spend>(view === 'trend' ? `/console/api/v1/spend?group_by=${span.modelGroupBy}&${span.q}${extra}` : null)
+  // Scoped, the bars (and the trend's top 5) rank that user's models, not the global rows.
+  const own = useLoad<Spend>(scoped ? `/console/api/v1/spend?group_by=model&${span.q}${extra}` : null)
+  const shown = scoped ? (own.data?.rows ?? (own.error ? [] : null)) : rows
   // Free models that served requests stay listed (at $0.00) under Cost.
-  const sorted = useMemo(() => (rows ?? []).filter((r) => r.requests > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [rows, metric])
+  const sorted = useMemo(() => (shown ?? []).filter((r) => r.requests > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [shown, metric])
   const total = sorted.reduce((s, r) => s + metricOf(r, metric), 0)
   const leader = sorted.length ? metricOf(sorted[0]!, metric) : 0
   return (
@@ -122,7 +125,8 @@ function TopModels({ rows, emptyText, span, granularity, can, users }: { rows: S
         </div>
       }
     >
-      {rows === null ? (
+      {scoped && <ErrorText>{own.error}</ErrorText>}
+      {shown === null ? (
         <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" />)}</div>
       ) : sorted.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
@@ -219,7 +223,7 @@ function Trend({ top, total, metric, rows, buckets, granularity }: { top: SpendR
 // 8 rows, bar = share of the leader, % = share of the total — with its own "Rank by". Rows are
 // group_by=user|group; ids resolve to an email/group name from the /users and /groups lists
 // (short(id) while those load or for an id that no longer exists).
-function TopBoard({ title, rows, emptyText, names, loading }: { title: string; rows: SpendRow[] | null; emptyText: string; names: Map<string, string> | null; loading: boolean }) {
+function TopBoard({ title, rows, emptyText, names }: { title: string; rows: SpendRow[] | null; emptyText: string; names: Map<string, string> | null }) {
   const [metric, setMetric] = useState<Metric>('cost')
   const sorted = useMemo(() => (rows ?? []).filter((r) => r.requests > 0).sort((a, b) => metricOf(b, metric) - metricOf(a, metric)), [rows, metric])
   const total = sorted.reduce((s, r) => s + metricOf(r, metric), 0)
@@ -229,7 +233,7 @@ function TopBoard({ title, rows, emptyText, names, loading }: { title: string; r
       title={title}
       actions={<Segmented label={`Rank by ${title}`} value={metric} onChange={setMetric} options={METRICS} />}
     >
-      {rows === null || loading ? (
+      {rows === null ? (
         <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-4 w-full" />)}</div>
       ) : sorted.length === 0 ? (
         <p className="py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
@@ -387,8 +391,8 @@ export default function Dashboard() {
       </div>
       {admin && (
         <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <TopBoard title="Top users" rows={byUser.data?.rows ?? (byUser.error ? [] : null)} emptyText={neverUsed ? 'No users yet.' : 'No requests in this period.'} names={userNames} loading={users.data === null} />
-          <TopBoard title="Top groups" rows={byGroup.data?.rows ?? (byGroup.error ? [] : null)} emptyText={neverUsed ? 'No groups yet.' : 'No requests in this period.'} names={groupNames} loading={groups.data === null} />
+          <TopBoard title="Top users" rows={byUser.data?.rows ?? (byUser.error ? [] : null)} emptyText={neverUsed ? 'No users yet.' : 'No requests in this period.'} names={userNames} />
+          <TopBoard title="Top groups" rows={byGroup.data?.rows ?? (byGroup.error ? [] : null)} emptyText={neverUsed ? 'No groups yet.' : 'No requests in this period.'} names={groupNames} />
         </div>
       )}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
