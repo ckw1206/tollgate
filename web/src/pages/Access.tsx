@@ -101,7 +101,7 @@ export default function Access() {
         <ErrorText>{error}</ErrorText>
       </div>
       <div className="flex flex-col gap-5">
-        <Table rows={groups.data && models.data ? groups.data : groups.error || models.error ? [] : null} empty="No groups yet." cols={cols} />
+        <Table rows={groups.data && models.data ? groups.data : groups.error || models.error ? [] : null} empty="No groups yet." cols={cols} scrollX={false} />
         {can('users:read') && (
           <div className="flex flex-col gap-2">
             <span className="text-sm font-medium text-muted-foreground">Users with extra grants</span>

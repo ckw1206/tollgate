@@ -145,13 +145,15 @@ export interface Col<T> {
 // With `expand`, a leading 40px chevron column is added; clicking the chevron or anywhere
 // on the row toggles a full-width detail row. Rows start collapsed and several may be open.
 // `rowKey` keeps the open set stable across reloads (defaults to the row index).
-export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowKey, rowLabel }: {
+// The table scroll wrapper can be disabled with `scrollX={false}` for tables that contain popovers which must not be clipped (e.g. MultiSelect in cells).
+export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowKey, rowLabel, scrollX = true }: {
   rows: T[] | null
   cols: Col<T>[]
   empty?: string
   expand?: (row: T) => ReactNode
   rowKey?: (row: T) => string
   rowLabel?: (row: T) => string
+  scrollX?: boolean
 }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set())
   // The detail panel is pinned to the visible width of the scroll container, so its
@@ -179,7 +181,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
   const span = cols.length + (expand ? 1 : 0)
   const cellCls = (i: number) => `whitespace-nowrap px-3 ${i === 0 ? 'font-medium' : ''} ${i === last && cols[i].head === '' ? 'text-right' : ''} ${cols[i].center ? 'text-center' : ''}`
   return (
-    <div ref={wrapRef} className="overflow-x-auto rounded-md border border-border">
+    <div ref={wrapRef} className={scrollX ? 'overflow-x-auto rounded-md border border-border' : 'overflow-visible rounded-md border border-border'}>
       <table className="min-w-full text-sm">
         <thead className="bg-table-header text-left text-[13px] text-muted-foreground">
           <tr className="h-10">
