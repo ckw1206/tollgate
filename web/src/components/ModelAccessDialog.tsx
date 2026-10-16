@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import type { Group, Model, User } from '../types'
 import { Button, ErrorText, Modal, ModalFooter, MultiSelect, useLoad } from './ui'
+import { extraModelOptions } from './modelOptions'
 
 // ModelAccessDialog: a user's extra model grants on top of their group's (Users tab row
 // action and the Model access tab). Saves extra_models; [] = group only.
@@ -11,11 +12,9 @@ export default function ModelAccessDialog({ user, group, onClose, onSaved }: { u
   const [busy, setBusy] = useState(false)
   const label = useId()
   const models = useLoad<Model[]>('/console/api/v1/models')
-  const enabled = (models.data ?? []).filter((m) => m.enabled).sort((a, b) => a.name.localeCompare(b.name))
   const all = group.models.length === 0
-  const options = enabled.filter((m) => !group.models.includes(m.name))
-  const stale = models.data ? extra.filter((n) => !options.some((m) => m.name === n)) : []
-  const usable = (n: string) => enabled.some((m) => m.name === n)
+  const { options, stale, enabledNames } = extraModelOptions(models.data, group, extra)
+  const usable = (n: string) => enabledNames.includes(n)
   const name = (user.name || user.email).split(' ')[0]
 
   const save = async (e: FormEvent) => {
@@ -49,7 +48,7 @@ export default function ModelAccessDialog({ user, group, onClose, onSaved }: { u
               <MultiSelect
                 labelledBy={label}
                 noAll
-                options={options.map((m) => ({ id: m.name, label: m.name, meta: m.provider }))}
+                options={options}
                 value={extra}
                 onChange={setExtra}
                 allLabel="None"
