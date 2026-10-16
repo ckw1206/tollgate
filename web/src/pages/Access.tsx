@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import ModelAccessDialog from '../components/ModelAccessDialog'
-import { Button, CheckButton, ErrorText, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
+import { Button, ErrorText, MultiSelect, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
 import { PEOPLE_TABS } from '../Layout'
 import type { Affected, Group, Model, User } from '../types'
 
@@ -50,15 +50,6 @@ export default function Access() {
     setToast(next)
   }
 
-  // Unticking All keeps just the first model; unticking a model on an All row keeps every
-  // other one; ticking the last missing model is All again. A list never goes empty ([] = All).
-  const toggle = (g: Group, m?: string) => {
-    if (!m) return save(g, isAll(g) ? names.slice(0, 1) : [], false)
-    const base = isAll(g) ? names : g.models.filter((n) => names.includes(n))
-    const next = base.includes(m) ? base.filter((n) => n !== m) : [...base, m]
-    if (next.length) save(g, next.length === names.length ? [] : next, false)
-  }
-
   const sub = (g: Group) => {
     const k = names.filter((n) => g.models.includes(n)).length
     return `${g.members} ${g.members === 1 ? 'member' : 'members'} · ${isAll(g) ? 'all models' : `${k} of ${names.length}`}`
@@ -73,21 +64,24 @@ export default function Access() {
         </span>
       ),
     },
-    { head: 'All models', center: true, cell: (g) => <CheckButton on={isAll(g)} disabled={busy} aria-label={`${g.name}: all models`} onClick={() => toggle(g)} /> },
-    ...sorted.map((m): Col<Group> => ({
-      head: <code className={`font-mono text-xs ${m.enabled ? '' : 'opacity-50'}`} title={m.enabled ? undefined : 'Disabled'}>{m.name}</code>,
-      center: true,
+    {
+      head: 'Allowed models',
       cell: (g) => (
-        <CheckButton
-          on={isAll(g) || g.models.includes(m.name)}
-          dim={isAll(g)}
-          title={isAll(g) ? 'Included via All models' : undefined}
-          disabled={busy}
-          aria-label={`${g.name}: ${m.name}`}
-          onClick={() => toggle(g, m.name)}
-        />
+        <>
+          <span id={`access-${g.id}`} className="sr-only">Allowed models for {g.name}</span>
+          <MultiSelect
+            labelledBy={`access-${g.id}`}
+            options={sorted.map((m) => ({ id: m.name, label: m.name, meta: m.enabled ? m.provider : m.provider + ' (disabled)' }))}
+            value={g.models}
+            onChange={(list) => { if (!busy) void save(g, list, false) }}
+            allLabel="All models"
+            allHint={models.data ? `${names.length} models, incl. future ones` : undefined}
+            allSub="Includes models added later"
+            staleIds={models.data ? g.models.filter((n) => !names.includes(n)) : []}
+          />
+        </>
       ),
-    })),
+    },
   ]
 
   const groupOf = (u: User) => groups.data?.find((g) => g.id === u.group_id)
