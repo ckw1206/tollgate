@@ -659,6 +659,8 @@ export function ModelPicker({ models, saved, group, onApply, editable = true }: 
   const wrap = useRef<HTMLSpanElement>(null)
   const trigger = useRef<HTMLButtonElement>(null)
   const box = useRef<HTMLDivElement>(null)
+  // The trigger rect and viewport height captured at open, for the post-mount flip pass.
+  const anchor = useRef<{ rect: DOMRect; vh: number } | null>(null)
   const id = useId()
 
   const savedSet = new Set(saved)
@@ -681,10 +683,10 @@ export function ModelPicker({ models, saved, group, onApply, editable = true }: 
   }
   const show = () => {
     const rect = trigger.current!.getBoundingClientRect()
-    // 4px below the trigger, or above it when that would overflow the viewport bottom.
-    setPos(rect.bottom + 400 > window.innerHeight
-      ? { left: rect.left, bottom: window.innerHeight - rect.top + 4 }
-      : { left: rect.left, top: rect.bottom + 4 })
+    // Always start below; the layout effect flips up after mount once the real
+    // height is known, so the header is never clipped by the 400px estimate.
+    anchor.current = { rect, vh: window.innerHeight }
+    setPos({ left: rect.left, top: rect.bottom + 4 })
     const init = initialPickerState(saved)
     setMode(init.mode)
     setDraft(init.draft)
@@ -750,6 +752,20 @@ export function ModelPicker({ models, saved, group, onApply, editable = true }: 
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
+
+  // The popover height varies by mode, so re-place it after mount and on mode
+  // switch using the real measured height. Runs before paint, so there is no
+  // flicker between the initial below-placement and the corrected one.
+  useLayoutEffect(() => {
+    if (!open || !pos || !anchor.current || !box.current) return
+    const a = anchor.current
+    const h = box.current.getBoundingClientRect().height
+    const flipUp = a.rect.bottom + 4 + h > a.vh && a.rect.top - 4 - h >= 0
+    const next: { left: number; top?: number; bottom?: number } = flipUp
+      ? { left: a.rect.left, bottom: a.vh - a.rect.top + 4 }
+      : { left: a.rect.left, top: a.rect.bottom + 4 }
+    if (pos.left !== next.left || pos.top !== next.top || pos.bottom !== next.bottom) setPos(next)
+  }, [open, mode])
 
   const triggerContent = (
     <>
