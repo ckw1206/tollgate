@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import ModelAccessDialog from '../components/ModelAccessDialog'
-import { Button, ErrorText, MultiSelect, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
+import { Button, ErrorText, ModelPicker, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
 import { PEOPLE_TABS } from '../Layout'
 import type { Affected, Group, Model, User } from '../types'
 
@@ -13,7 +13,6 @@ export default function Access() {
   const groups = useLoad<Group[]>('/console/api/v1/groups')
   const models = useLoad<Model[]>('/console/api/v1/models')
   const users = useLoad<User[]>(can('users:read') ? '/console/api/v1/users' : null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ id: number; text: string; undo?: () => void } | null>(null)
   const [editing, setEditing] = useState<User | null>(null)
@@ -21,11 +20,10 @@ export default function Access() {
   const names = sorted.map((m) => m.name) // every model, disabled included: they can be granted ahead of time
   const isAll = (g: Group) => g.models.length === 0
 
-  // PUT /groups/{id} replaces the whole group: resend it as loaded, with the new list. Cells
-  // stay disabled until the reload lands, so the next click starts from the saved list; the
-  // Undo toast waits for it too, so Undo can't start a save while this one is still busy.
+  // PUT /groups/{id} replaces the whole group: resend it as loaded, with the new list. The
+  // picker closes before the PUT, so the next save starts from the reloaded list; the Undo
+  // toast waits for the reload too, so Undo can't start a save before it lands.
   const save = async (g: Group, list: string[], undo: boolean) => {
-    setBusy(true)
     setError('')
     setToast(null) // any save supersedes the last Undo, so it can't race this PUT
     let next: typeof toast = null
@@ -40,20 +38,17 @@ export default function Access() {
       const prev = g.models.filter((m) => names.includes(m))
       if (!undo) {
         const keys = n > 0 ? ` ${n} ${n === 1 ? 'key lists' : 'keys list'} models it no longer allows.` : ''
-        next = { id: Date.now(), text: `Saved "${g.name}".${keys}`, undo: prev.length || isAll(g) ? () => save(g, prev, true) : undefined }
+        const count = list.length ? `${list.length} of ${names.length} models` : 'all models'
+        next = { id: Date.now(), text: `Saved "${g.name}" — ${count}.${keys}`, undo: prev.length || isAll(g) ? () => save(g, prev, true) : undefined }
       }
     } catch (err) {
       setError((err as Error).message)
     }
     await groups.reload()
-    setBusy(false)
     setToast(next)
   }
 
-  const sub = (g: Group) => {
-    const k = names.filter((n) => g.models.includes(n)).length
-    return `${g.members} ${g.members === 1 ? 'member' : 'members'} · ${isAll(g) ? 'all models' : `${k} of ${names.length}`}`
-  }
+  const sub = (g: Group) => `${g.members} ${g.members === 1 ? 'member' : 'members'}`
   const cols: Col<Group>[] = [
     {
       head: 'Group',
@@ -67,19 +62,13 @@ export default function Access() {
     {
       head: 'Allowed models',
       cell: (g) => (
-        <>
-          <span id={`access-${g.id}`} className="sr-only">Allowed models for {g.name}</span>
-          <MultiSelect
-            labelledBy={`access-${g.id}`}
-            options={sorted.map((m) => ({ id: m.name, label: m.name, meta: m.enabled ? m.provider : m.provider + ' (disabled)' }))}
-            value={g.models}
-            onChange={(list) => { if (!busy) void save(g, list, false) }}
-            allLabel="All models"
-            allHint={models.data ? `${names.length} models, incl. future ones` : undefined}
-            allSub="Includes models added later"
-            staleIds={models.data ? g.models.filter((n) => !names.includes(n)) : []}
-          />
-        </>
+        <ModelPicker
+          group={g.name}
+          models={(models.data ?? []).map((m) => ({ name: m.name, provider: m.provider, enabled: m.enabled }))}
+          saved={g.models}
+          editable={can('groups:write')}
+          onApply={(list) => void save(g, list, false)}
+        />
       ),
     },
   ]
@@ -101,7 +90,7 @@ export default function Access() {
         <ErrorText>{error}</ErrorText>
       </div>
       <div className="flex flex-col gap-5">
-        <Table rows={groups.data && models.data ? groups.data : groups.error || models.error ? [] : null} empty="No groups yet." cols={cols} scrollX={false} />
+        <Table rows={groups.data && models.data ? groups.data : groups.error || models.error ? [] : null} empty="No groups yet." cols={cols} />
         {can('users:read') && (
           <div className="flex flex-col gap-2">
             <span className="text-sm font-medium text-muted-foreground">Users with extra grants</span>
