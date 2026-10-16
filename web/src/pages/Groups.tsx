@@ -10,7 +10,7 @@ export default function Groups() {
   const { can } = useAuth()
   const writable = can('groups:write')
   const groups = useLoad<Group[]>('/console/api/v1/groups')
-  const models = useLoad<Model[]>(writable ? '/console/api/v1/models' : null)
+  const models = useLoad<Model[]>('/console/api/v1/models')
   const enabled = (models.data ?? []).filter((m) => m.enabled).sort((a, b) => a.name.localeCompare(b.name))
   const modelsLabel = useId()
   const [editing, setEditing] = useState<Group | 'new' | null>(null)
@@ -68,7 +68,16 @@ export default function Groups() {
           { head: 'Members', cell: (g) => g.members },
           { head: 'Budget (USD)', cell: (g) => budgetText(g) },
           { head: 'RPM / TPM', cell: (g) => `${limitText(g.rpm_limit)} / ${limitText(g.tpm_limit)}` },
-          { head: 'Allowed models', cell: (g) => (g.models.length ? g.models.join(', ') : 'All') },
+          { head: 'Allowed models',
+            cell: (g) => {
+              if (!g.models.length) return 'All'
+              const list = [...g.models].sort()
+              const all = models.data
+              const text = all
+                ? `${g.models.filter((n) => all.some((m) => m.name === n)).length} of ${all.length} · ${list.join(', ')}`
+                : list.join(', ') // models still loading
+              return <span title={text} className="inline-block max-w-[260px] truncate align-bottom">{text}</span>
+            } },
           { head: '', cell: (g) => writable && <RowActions><Button size="sm" variant="ghost" onClick={() => open(g)}>Edit</Button></RowActions> },
         ]}
       />

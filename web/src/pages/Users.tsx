@@ -8,11 +8,12 @@ import { Badge, Button, ErrorText, PageHeader, RowActions, rowsOf, SecretDialog,
 import { PEOPLE_TABS } from '../Layout'
 import type { Group, User } from '../types'
 
-// modelsText: "group (all)", "group + a, b" (extra grants) or "group (N)".
+// modelsText: "All (via group)", "N via group", or "N via group + a, b" (extra grants).
 function modelsText(u: User, g: Group | undefined) {
   if (!g) return '—'
-  if (!g.models.length) return 'group (all)'
-  return u.extra_models.length ? `group + ${u.extra_models.join(', ')}` : `group (${g.models.length})`
+  if (!g.models.length) return 'All (via group)'
+  const base = `${g.models.length} via group`
+  return u.extra_models.length ? `${base} + ${u.extra_models.join(', ')}` : base
 }
 
 export default function Users() {
