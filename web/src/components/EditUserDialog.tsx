@@ -33,9 +33,10 @@ export default function EditUserDialog({ user, groups, onClose, onSaved }: { use
     }
     setBusy(true)
     setError('')
-    // When the group allows all models the field is hidden; clear the old
-    // extras instead of silently keeping them.
-    const body = { role, group_id, extra_models: extraOpts ? extra : [], disabled: !enabled, ...(password ? { password } : {}) }
+    // Clear extras only when a group is resolved and it allows all models
+    // (the field is hidden then); an unknown group keeps the user's existing
+    // extras instead of silently wiping them.
+    const body = { role, group_id, extra_models: group && group.models.length === 0 ? [] : extra, disabled: !enabled, ...(password ? { password } : {}) }
     try {
       await api(`/console/api/v1/users/${user.id}`, { method: 'PUT', body })
       onSaved()
