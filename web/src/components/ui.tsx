@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, matchPath, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { applyState, groupByProvider, initialPickerState, triggerSummary, type PickerMode, type PickerModel } from './modelPicker'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
 // Colors, radii and fonts come from Alison UI tokens (see index.css).
@@ -633,6 +635,302 @@ export function MultiSelect({ options, value, onChange, allLabel, allHint, allSu
         </div>
       )}
     </div>
+  )
+}
+
+// ModelPicker: the allowed-models cell for a group — an "All models" badge or up to three
+// name chips in the trigger, and a portaled popover with an All/Selected switch, a
+// searchable provider-grouped list and an Apply/Cancel footer. saved [] means All. Stale
+// names (deleted models) ride along in the draft but are never rendered or counted.
+// onApply gets the sorted pick list; the caller owns the PUT, reload, toast and Undo.
+export function ModelPicker({ models, saved, group, onApply, editable = true }: {
+  models: PickerModel[] // every model, disabled included (from GET /models); any order
+  saved: string[] // the group's saved list; [] = All
+  group: string // group name, for the header and aria
+  onApply: (list: string[]) => void
+  editable?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<PickerMode>('all')
+  const [draft, setDraft] = useState<Set<string>>(() => new Set())
+  const [query, setQuery] = useState('')
+  const [active, setActive] = useState(0)
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number } | null>(null)
+  const wrap = useRef<HTMLSpanElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  // The trigger rect and viewport height captured at open, for the post-mount flip pass.
+  const anchor = useRef<{ rect: DOMRect; vh: number } | null>(null)
+  const id = useId()
+
+  const savedSet = new Set(saved)
+  const optionNames = new Set(models.map((m) => m.name))
+  const enabledCount = models.filter((m) => m.enabled).length
+  const sum = triggerSummary(saved, models.length)
+  // The draft may carry stale names; only entries that are current options count as picks.
+  const pickCount = [...draft].filter((n) => optionNames.has(n)).length
+  const footer = applyState(mode, saved, [...draft], models.length, pickCount)
+  const q = query.trim().toLowerCase()
+  const groups = groupByProvider(q ? models.filter((m) => m.name.toLowerCase().includes(q)) : models, draft)
+  const visible = groups.flatMap((g) => g.models)
+  const rowIdx = new Map(visible.map((m, i) => [m.name, i]))
+
+  // Every close path discards the draft (the next open re-derives it from saved) and puts
+  // focus back on the trigger.
+  const close = () => {
+    setOpen(false)
+    trigger.current?.focus()
+  }
+  const show = () => {
+    const rect = trigger.current!.getBoundingClientRect()
+    // Always start below; the layout effect flips up after mount once the real
+    // height is known, so the header is never clipped by the 400px estimate.
+    anchor.current = { rect, vh: window.innerHeight }
+    setPos({ left: rect.left, top: rect.bottom + 4 })
+    const init = initialPickerState(saved)
+    setMode(init.mode)
+    setDraft(init.draft)
+    setQuery('')
+    setActive(0)
+    setOpen(true)
+  }
+  const switchMode = (next: PickerMode) => {
+    if (next === 'selected' && mode !== 'selected') {
+      // All → Selected: re-derive the draft — the saved picks that are still options, or
+      // every enabled model when the group allows all. Discards earlier edits: deterministic.
+      setDraft(saved.length
+        ? new Set(saved.filter((n) => optionNames.has(n)))
+        : new Set(models.filter((m) => m.enabled).map((m) => m.name)))
+    }
+    if (next === 'all') setDraft(new Set()) // All means no picks; Apply sends []
+    setMode(next)
+  }
+  const toggle = (name: string) =>
+    setDraft((d) => {
+      const next = new Set(d)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  const mutate = (names: string[], add: boolean) =>
+    setDraft((d) => {
+      const next = new Set(d)
+      for (const n of names) {
+        if (add) next.add(n)
+        else next.delete(n)
+      }
+      return next
+    })
+  const apply = () => {
+    onApply(Array.from(draft).sort())
+    close()
+  }
+  const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const k = e.key
+    const row = visible[active]
+    if (k === 'ArrowDown' || k === 'ArrowUp') {
+      e.preventDefault()
+      setActive((a) => Math.max(0, Math.min(visible.length - 1, a + (k === 'ArrowDown' ? 1 : -1))))
+    } else if ((k === ' ' || k === 'Enter') && row) {
+      e.preventDefault() // Space toggles rather than typing; model names have no spaces
+      toggle(row.name)
+    } else if (k === 'Escape') {
+      e.stopPropagation() // close the popover, not the dialog around it
+      close()
+    } else if (k === 'Tab') {
+      e.preventDefault()
+      close()
+    }
+  }
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (wrap.current && !wrap.current.contains(t) && (!box.current || !box.current.contains(t))) close()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // The popover height varies by mode, so re-place it after mount and on mode
+  // switch using the real measured height. Runs before paint, so there is no
+  // flicker between the initial below-placement and the corrected one.
+  useLayoutEffect(() => {
+    if (!open || !pos || !anchor.current || !box.current) return
+    const a = anchor.current
+    const h = box.current.getBoundingClientRect().height
+    const flipUp = a.rect.bottom + 4 + h > a.vh && a.rect.top - 4 - h >= 0
+    const next: { left: number; top?: number; bottom?: number } = flipUp
+      ? { left: a.rect.left, bottom: a.vh - a.rect.top + 4 }
+      : { left: a.rect.left, top: a.rect.bottom + 4 }
+    if (pos.left !== next.left || pos.top !== next.top || pos.bottom !== next.bottom) setPos(next)
+  }, [open, mode])
+
+  const triggerContent = (
+    <>
+      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+        {sum.all ? (
+          <>
+            <span className="inline-flex h-[22px] shrink-0 items-center rounded-sm bg-primary px-2 text-xs font-medium text-primary-foreground">All models</span>
+            <span className="whitespace-nowrap text-[13px] text-muted-foreground">incl. models added later</span>
+          </>
+        ) : (
+          <>
+            {sum.chips.map((c) => (
+              <span key={c} className="shrink-0 rounded-sm bg-secondary px-1.5 py-0.5 font-mono text-xs text-secondary-foreground">{c}</span>
+            ))}
+            {sum.more > 0 && <span className="shrink-0 text-xs text-muted-foreground">+{sum.more} more</span>}
+          </>
+        )}
+      </span>
+      <span className="ml-auto shrink-0 whitespace-nowrap text-xs text-muted-foreground">{sum.label}</span>
+      {editable && <span aria-hidden className="shrink-0 text-muted-foreground">▾</span>}
+    </>
+  )
+
+  return (
+    <span ref={wrap} className="block w-full max-w-[560px]">
+      {editable ? (
+        <button
+          ref={trigger}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-label={`Allowed models for ${group}`}
+          className="flex h-9 w-full items-center gap-2 overflow-hidden rounded-md border border-input px-2.5 text-left outline-none hover:bg-accent focus:border-ring focus:ring-[3px] focus:ring-ring/50"
+          onClick={() => (open ? close() : show())}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowDown' && !open) {
+              e.preventDefault()
+              show()
+            }
+          }}
+        >
+          {triggerContent}
+        </button>
+      ) : (
+        <span
+          aria-label={`Allowed models for ${group}`}
+          className="flex h-9 w-full cursor-default items-center gap-2 overflow-hidden rounded-md border border-input px-2.5 text-left"
+        >
+          {triggerContent}
+        </span>
+      )}
+      {open && pos && createPortal(
+        <div
+          ref={box}
+          role="dialog"
+          aria-label={`Allowed models for ${group}`}
+          className="fixed z-40 w-[400px] rounded-md border border-border bg-background shadow-dialog"
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom }}
+        >
+          <div className="px-3 py-3 border-b border-border">
+            <span className="block text-xs text-muted-foreground">Allowed models · {group}</span>
+            <div role="radiogroup" aria-label="Selection mode" className="mt-2 grid grid-cols-2 gap-1 rounded-md border border-border p-0.5">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === 'all'}
+                onClick={() => switchMode('all')}
+                className={`h-[30px] rounded-sm text-[13px] font-medium ${mode === 'all' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}`}
+              >
+                All models
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === 'selected'}
+                onClick={() => switchMode('selected')}
+                className={`h-[30px] rounded-sm text-[13px] font-medium ${mode === 'selected' ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}`}
+              >
+                Selected models
+              </button>
+            </div>
+          </div>
+          {mode === 'all' ? (
+            <div className="px-3 py-3 space-y-1 text-sm">
+              <p>Members can use every enabled model — {enabledCount} today, plus any added later.</p>
+              <p className="text-[13px] text-muted-foreground">Choose Selected models to restrict this group.</p>
+            </div>
+          ) : (
+            <>
+              <div className="px-3 pt-3">
+                <input
+                  autoFocus
+                  role="combobox"
+                  aria-expanded="true"
+                  aria-controls={`${id}-list`}
+                  aria-activedescendant={visible.length ? `${id}-row-${active}` : undefined}
+                  aria-label="Search"
+                  placeholder="Search…"
+                  className="h-9 w-full border-b border-border bg-transparent px-0 text-sm outline-none"
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value)
+                    setActive(0)
+                  }}
+                  onKeyDown={onSearchKey}
+                />
+              </div>
+              <ul id={`${id}-list`} role="listbox" aria-multiselectable="true" className="max-h-[280px] overflow-y-auto py-1">
+                {groups.map((g) => (
+                  <Fragment key={g.provider}>
+                    <li className="flex items-center justify-between gap-2 px-3 pt-2 pb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{g.provider} · {g.on}/{g.total}</span>
+                      <span className="flex items-center gap-2">
+                        {g.on < g.total && (
+                          <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => mutate(g.models.map((m) => m.name), true)}>
+                            Select all
+                          </button>
+                        )}
+                        {g.on > 0 && (
+                          <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => mutate(g.models.map((m) => m.name), false)}>
+                            Clear
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                    {g.models.map((m) => {
+                      const i = rowIdx.get(m.name) ?? -1
+                      const inDraft = draft.has(m.name)
+                      return (
+                        <li
+                          key={m.name}
+                          id={`${id}-row-${i}`}
+                          role="option"
+                          aria-selected={inDraft}
+                          className={`flex h-9 cursor-pointer items-center gap-2 px-3 ${i === active ? 'bg-accent' : ''}`}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => toggle(m.name)}
+                        >
+                          <span aria-hidden className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-sm border text-[10px] ${inDraft ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>
+                            {inDraft && '✓'}
+                          </span>
+                          <span className="min-w-0 flex-1 truncate font-mono text-xs">{m.name}</span>
+                          {!m.enabled && <span className="shrink-0 rounded-sm border border-input px-1 text-[10px] text-muted-foreground">disabled</span>}
+                          {inDraft && !savedSet.has(m.name) && <span className="shrink-0 bg-success px-1.5 py-0.5 text-[10px] font-medium text-success-foreground">+ added</span>}
+                          {!inDraft && savedSet.has(m.name) && <span className="shrink-0 bg-destructive px-1.5 py-0.5 text-[10px] font-medium text-destructive-foreground">− removed</span>}
+                        </li>
+                      )
+                    })}
+                  </Fragment>
+                ))}
+                {visible.length === 0 && <li className="px-3 py-2 text-sm text-muted-foreground">No models match "{query}".</li>}
+              </ul>
+            </>
+          )}
+          <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2.5">
+            <span className={`text-xs ${footer.destructive ? 'text-destructive' : 'text-muted-foreground'}`}>{footer.left}</span>
+            <span className="flex items-center gap-2">
+              <Button type="button" size="sm" variant="ghost" onClick={close}>Cancel</Button>
+              <Button type="button" size="sm" disabled={!footer.applyable} onClick={apply}>Apply</Button>
+            </span>
+          </div>
+        </div>,
+        document.body,
+      )}
+    </span>
   )
 }
 

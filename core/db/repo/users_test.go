@@ -120,3 +120,23 @@ func TestUpdateUser_Partial(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
+
+func TestUpdateUser_Password(t *testing.T) {
+	s, g := newStore(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "a@x.io", "A", "hunter22hunter22", "member", g.ID)
+	ptr := func(s string) *string { return &s }
+	got, err := s.UpdateUser(ctx, u.ID, repo.UserUpdate{Password: ptr("brand-new-pw-1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !repo.CheckPassword(got, "brand-new-pw-1") || repo.CheckPassword(got, "hunter22hunter22") {
+		t.Fatalf("reset: %+v", got)
+	}
+	if got, err = s.UpdateUser(ctx, u.ID, repo.UserUpdate{}); err != nil || !repo.CheckPassword(got, "brand-new-pw-1") {
+		t.Fatalf("absent password changed it: %+v %v", got, err)
+	}
+	if got, err = s.UpdateUser(ctx, u.ID, repo.UserUpdate{Password: ptr("")}); err != nil || !repo.CheckPassword(got, "brand-new-pw-1") {
+		t.Fatalf("empty password changed it: %+v %v", got, err)
+	}
+}

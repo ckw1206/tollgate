@@ -29,6 +29,7 @@ type UserUpdate struct {
 	GroupID     *string   `json:"group_id"`
 	Disabled    *bool     `json:"disabled"`
 	ExtraModels *[]string `json:"extra_models"`
+	Password    *string   `json:"password"` // absent or empty string = no change; non-empty is bcrypt(12)ed here, by the data layer
 }
 
 const userCols = `id, email, name, password_hash, role, group_id, disabled, extra_models, created_at, updated_at`
@@ -134,6 +135,14 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 }
 
 func (s *Store) UpdateUser(ctx context.Context, id string, in UserUpdate) (*User, error) {
+	var pw *string
+	if in.Password != nil && *in.Password != "" {
+		h, err := hashPassword(*in.Password)
+		if err != nil {
+			return nil, err
+		}
+		pw = &h
+	}
 	return scanUser(s.pool.QueryRow(ctx, `
 		UPDATE users SET
 			name     = COALESCE($2, name),
@@ -141,6 +150,7 @@ func (s *Store) UpdateUser(ctx context.Context, id string, in UserUpdate) (*User
 			group_id = COALESCE($4::uuid, group_id),
 			disabled = COALESCE($5, disabled),
 			extra_models = COALESCE($6::text[], extra_models),
+			password_hash = COALESCE($7, password_hash),
 			updated_at = now()
-		WHERE id=$1 RETURNING `+userCols, id, in.Name, in.Role, in.GroupID, in.Disabled, in.ExtraModels))
+		WHERE id=$1 RETURNING `+userCols, id, in.Name, in.Role, in.GroupID, in.Disabled, in.ExtraModels, pw))
 }

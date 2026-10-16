@@ -46,6 +46,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 		"POST " + p + "/invites":          req(rbac.InvitesWrite, s.createInvite),
 		"DELETE " + p + "/invites/{id}":   req(rbac.InvitesWrite, s.revokeInvite),
 		"GET " + p + "/users":             req(rbac.UsersRead, s.listUsers),
+		"POST " + p + "/users":            req(rbac.UsersWrite, s.createUser),
 		"PUT " + p + "/users/{id}":        req(rbac.UsersWrite, s.updateUser),
 		"DELETE " + p + "/users/{id}":     req(rbac.UsersWrite, s.disableUser),
 		"GET " + p + "/groups":            req(rbac.GroupsReadOwn, s.listGroups),

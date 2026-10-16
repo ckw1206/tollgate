@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import ModelAccessDialog from '../components/ModelAccessDialog'
-import { Button, CheckButton, ErrorText, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
+import { Button, ErrorText, ModelPicker, PageHeader, RowActions, Table, Toast, useLoad, type Col } from '../components/ui'
 import { PEOPLE_TABS } from '../Layout'
 import type { Affected, Group, Model, User } from '../types'
 
@@ -13,7 +13,6 @@ export default function Access() {
   const groups = useLoad<Group[]>('/console/api/v1/groups')
   const models = useLoad<Model[]>('/console/api/v1/models')
   const users = useLoad<User[]>(can('users:read') ? '/console/api/v1/users' : null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState<{ id: number; text: string; undo?: () => void } | null>(null)
   const [editing, setEditing] = useState<User | null>(null)
@@ -21,11 +20,10 @@ export default function Access() {
   const names = sorted.map((m) => m.name) // every model, disabled included: they can be granted ahead of time
   const isAll = (g: Group) => g.models.length === 0
 
-  // PUT /groups/{id} replaces the whole group: resend it as loaded, with the new list. Cells
-  // stay disabled until the reload lands, so the next click starts from the saved list; the
-  // Undo toast waits for it too, so Undo can't start a save while this one is still busy.
+  // PUT /groups/{id} replaces the whole group: resend it as loaded, with the new list. The
+  // picker closes before the PUT, so the next save starts from the reloaded list; the Undo
+  // toast waits for the reload too, so Undo can't start a save before it lands.
   const save = async (g: Group, list: string[], undo: boolean) => {
-    setBusy(true)
     setError('')
     setToast(null) // any save supersedes the last Undo, so it can't race this PUT
     let next: typeof toast = null
@@ -34,35 +32,23 @@ export default function Access() {
         method: 'PUT',
         body: { name: g.name, budget_type: g.budget_type, budget_nanos: g.budget_nanos, rpm_limit: g.rpm_limit, tpm_limit: g.tpm_limit, models: list },
       })
-      // Undo restores the list as toggle saw it: names of deleted models are gone from the saved
+      // Undo restores the list as the UI saw it: names of deleted models are gone from the saved
       // list, and the server only keeps unknown names that are still stored. A list of nothing
       // but such names has no undo: [] would mean All.
       const prev = g.models.filter((m) => names.includes(m))
       if (!undo) {
         const keys = n > 0 ? ` ${n} ${n === 1 ? 'key lists' : 'keys list'} models it no longer allows.` : ''
-        next = { id: Date.now(), text: `Saved "${g.name}".${keys}`, undo: prev.length || isAll(g) ? () => save(g, prev, true) : undefined }
+        const count = list.length ? `${list.length} of ${names.length} models` : 'all models'
+        next = { id: Date.now(), text: `Saved "${g.name}" — ${count}.${keys}`, undo: prev.length || isAll(g) ? () => save(g, prev, true) : undefined }
       }
     } catch (err) {
       setError((err as Error).message)
     }
     await groups.reload()
-    setBusy(false)
     setToast(next)
   }
 
-  // Unticking All keeps just the first model; unticking a model on an All row keeps every
-  // other one; ticking the last missing model is All again. A list never goes empty ([] = All).
-  const toggle = (g: Group, m?: string) => {
-    if (!m) return save(g, isAll(g) ? names.slice(0, 1) : [], false)
-    const base = isAll(g) ? names : g.models.filter((n) => names.includes(n))
-    const next = base.includes(m) ? base.filter((n) => n !== m) : [...base, m]
-    if (next.length) save(g, next.length === names.length ? [] : next, false)
-  }
-
-  const sub = (g: Group) => {
-    const k = names.filter((n) => g.models.includes(n)).length
-    return `${g.members} ${g.members === 1 ? 'member' : 'members'} · ${isAll(g) ? 'all models' : `${k} of ${names.length}`}`
-  }
+  const sub = (g: Group) => `${g.members} ${g.members === 1 ? 'member' : 'members'}`
   const cols: Col<Group>[] = [
     {
       head: 'Group',
@@ -73,21 +59,18 @@ export default function Access() {
         </span>
       ),
     },
-    { head: 'All models', center: true, cell: (g) => <CheckButton on={isAll(g)} disabled={busy} aria-label={`${g.name}: all models`} onClick={() => toggle(g)} /> },
-    ...sorted.map((m): Col<Group> => ({
-      head: <code className={`font-mono text-xs ${m.enabled ? '' : 'opacity-50'}`} title={m.enabled ? undefined : 'Disabled'}>{m.name}</code>,
-      center: true,
+    {
+      head: 'Allowed models',
       cell: (g) => (
-        <CheckButton
-          on={isAll(g) || g.models.includes(m.name)}
-          dim={isAll(g)}
-          title={isAll(g) ? 'Included via All models' : undefined}
-          disabled={busy}
-          aria-label={`${g.name}: ${m.name}`}
-          onClick={() => toggle(g, m.name)}
+        <ModelPicker
+          group={g.name}
+          models={(models.data ?? []).map((m) => ({ name: m.name, provider: m.provider, enabled: m.enabled }))}
+          saved={g.models}
+          editable={can('groups:write')}
+          onApply={(list) => void save(g, list, false)}
         />
       ),
-    })),
+    },
   ]
 
   const groupOf = (u: User) => groups.data?.find((g) => g.id === u.group_id)
