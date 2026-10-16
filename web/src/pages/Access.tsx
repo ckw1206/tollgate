@@ -34,7 +34,7 @@ export default function Access() {
         method: 'PUT',
         body: { name: g.name, budget_type: g.budget_type, budget_nanos: g.budget_nanos, rpm_limit: g.rpm_limit, tpm_limit: g.tpm_limit, models: list },
       })
-      // Undo restores the list as toggle saw it: names of deleted models are gone from the saved
+      // Undo restores the list as the UI saw it: names of deleted models are gone from the saved
       // list, and the server only keeps unknown names that are still stored. A list of nothing
       // but such names has no undo: [] would mean All.
       const prev = g.models.filter((m) => names.includes(m))

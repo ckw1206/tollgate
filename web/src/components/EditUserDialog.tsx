@@ -52,7 +52,7 @@ export default function EditUserDialog({ user, groups, onClose, onSaved }: { use
 
   return (
     <>
-      <Modal title={`Edit "${user.name || user.email}"`} onClose={onClose}>
+      <Modal title={`Edit "${user.name || user.email}"`} onClose={() => { if (!confirming) onClose() }}>
         <form onSubmit={submit} className="space-y-4">
           <Field label="Role">
             <select className={inputCls} value={role} onChange={(e) => setRole(e.target.value as Role)}>
