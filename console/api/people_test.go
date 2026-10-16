@@ -89,6 +89,98 @@ func TestUsers_AdminCannotLockThemselvesOut(t *testing.T) {
 	}
 }
 
+func TestUsers_CreateAndSignin(t *testing.T) {
+	e := newTenv(t)
+	team, _ := e.store.CreateGroup(context.Background(), repo.GroupInput{Name: "team", BudgetType: "unlimited"})
+	w := e.as("admin@x.io", "POST", "/console/api/v1/users", map[string]any{
+		"email": "New@X.io", "name": "New", "role": "member", "group_id": team.ID, "password": "a-long-password"})
+	if w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	u := decodeInto[repo.User](t, w)
+	if u.Email != "new@x.io" || u.Role != "member" || u.GroupID != team.ID {
+		t.Fatalf("got %+v", u)
+	}
+	if b := w.Body.String(); strings.Contains(b, "a-long-password") || strings.Contains(b, "$2") {
+		t.Fatalf("response leaks password: %s", b)
+	}
+	if w := e.raw("", "POST", "/auth/login", map[string]string{"email": "new@x.io", "password": "a-long-password"}); w.Code != 200 {
+		t.Fatalf("sign in with typed password: %d %s", w.Code, w.Body)
+	}
+	entries, _, _ := e.store.ListAudit(context.Background(), repo.AuditFilter{Action: "user.create", Limit: 50})
+	if len(entries) != 1 {
+		t.Fatalf("audit entries: %+v", entries)
+	}
+	a := entries[0]
+	if a.ActorEmail != "admin@x.io" || a.Resource != "users" {
+		t.Fatalf("audit: %+v", a)
+	}
+	if d := string(a.Details); !strings.Contains(d, "new@x.io") || strings.Contains(d, "a-long-password") || strings.Contains(d, "$2") {
+		t.Fatalf("audit details: %s", d)
+	}
+}
+
+func TestUsers_CreateValidation(t *testing.T) {
+	e := newTenv(t)
+	team, _ := e.store.CreateGroup(context.Background(), repo.GroupInput{Name: "team", BudgetType: "unlimited"})
+	check := func(body map[string]any, want string) {
+		w := e.as("admin@x.io", "POST", "/console/api/v1/users", body)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("%v: %d %s", body, w.Code, w.Body)
+		}
+	}
+	check(map[string]any{}, "email is required")
+	check(map[string]any{"email": "a@x.io", "role": "superuser", "group_id": team.ID, "password": "a-long-password"}, "role must be admin, member, or viewer")
+	check(map[string]any{"email": "a@x.io", "role": "member", "group_id": team.ID, "password": "short"}, "password must be at least 12 characters")
+	check(map[string]any{"email": "a@x.io", "role": "member", "group_id": "00000000-0000-0000-0000-000000000000", "password": "a-long-password"}, "unknown group")
+	body := map[string]any{"email": "new@x.io", "name": "New", "role": "member", "group_id": team.ID, "password": "a-long-password"}
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/users", body); w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("admin@x.io", "POST", "/console/api/v1/users", body); w.Code != 409 || !strings.Contains(w.Body.String(), "a user with this email already exists") {
+		t.Fatalf("duplicate: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestUsers_ResetPassword(t *testing.T) {
+	e := newTenv(t)
+	path := "/console/api/v1/users/" + e.member.ID
+	login := func(pw string) int {
+		return e.raw("", "POST", "/auth/login", map[string]string{"email": "member@x.io", "password": pw}).Code
+	}
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"password": "another-long-pw"}); w.Code != 200 {
+		t.Fatalf("reset: %d %s", w.Code, w.Body)
+	}
+	if got := login("hunter22hunter22"); got != 401 {
+		t.Fatalf("old password still works: %d", got)
+	}
+	if got := login("another-long-pw"); got != 200 {
+		t.Fatalf("new password: %d", got)
+	}
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"name": "M2"}); w.Code != 200 {
+		t.Fatalf("name-only save: %d %s", w.Code, w.Body)
+	}
+	if got := login("another-long-pw"); got != 200 {
+		t.Fatalf("password changed by absent field: %d", got)
+	}
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"password": ""}); w.Code != 200 {
+		t.Fatalf("empty password: %d %s", w.Code, w.Body)
+	}
+	if got := login("another-long-pw"); got != 200 {
+		t.Fatalf("password changed by empty string: %d", got)
+	}
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"password": "short"}); w.Code != 400 || !strings.Contains(w.Body.String(), "password must be at least 12 characters") {
+		t.Fatalf("short: %d %s", w.Code, w.Body)
+	}
+	entries, _, _ := e.store.ListAudit(context.Background(), repo.AuditFilter{Action: "user.update", Limit: 50})
+	if len(entries) == 0 {
+		t.Fatal("no user.update audit entries")
+	}
+	if d := string(entries[0].Details); strings.Contains(d, "another-long-pw") || strings.Contains(d, "hunter22hunter22") || strings.Contains(d, "$2") {
+		t.Fatalf("audit leaks password: %s", d)
+	}
+}
+
 func TestGroups_MemberSeesOnlyOwn(t *testing.T) {
 	e := newTenv(t)
 	e.store.CreateGroup(context.Background(), repo.GroupInput{Name: "other", BudgetType: "unlimited"})

@@ -1,8 +1,10 @@
 package consoleapi
 
 import (
+	"errors"
 	"net/http"
 	"slices"
+	"strings"
 
 	"tollgate/console/auth"
 	"tollgate/console/rbac"
@@ -19,6 +21,46 @@ func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, us)
 }
 
+func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Email    string `json:"email"`
+		Name     string `json:"name"`
+		Role     string `json:"role"`
+		GroupID  string `json:"group_id"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Email) == "" {
+		badRequest(w, "email is required")
+		return
+	}
+	if !rbac.ValidRole(in.Role) {
+		badRequest(w, "role must be admin, member, or viewer")
+		return
+	}
+	if len(in.Password) < 12 {
+		badRequest(w, "password must be at least 12 characters")
+		return
+	}
+	if _, err := s.Store.GetGroup(r.Context(), in.GroupID); err != nil {
+		badRequest(w, "unknown group")
+		return
+	}
+	u, err := s.Store.CreateUser(r.Context(), in.Email, in.Name, in.Password, in.Role, in.GroupID)
+	if err != nil {
+		if errors.Is(err, repo.ErrConflict) {
+			api.WriteError(w, 409, "invalid_request_error", "email_taken", "a user with this email already exists")
+			return
+		}
+		storeErr(w, err)
+		return
+	}
+	s.audit(r, "user.create", "users", u.ID, nil, u)
+	api.WriteJSON(w, 201, u)
+}
+
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in repo.UserUpdate
@@ -27,6 +69,10 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Role != nil && !rbac.ValidRole(*in.Role) {
 		badRequest(w, "role must be admin, member, or viewer")
+		return
+	}
+	if in.Password != nil && *in.Password != "" && len(*in.Password) < 12 {
+		badRequest(w, "password must be at least 12 characters")
 		return
 	}
 	before, err := s.Store.GetUser(r.Context(), id)

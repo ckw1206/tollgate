@@ -263,6 +263,7 @@ func TestRoutes_DeniedRoles(t *testing.T) {
 		{"POST", "/invites", rbac.InvitesWrite},
 		{"DELETE", "/invites/" + id, rbac.InvitesWrite},
 		{"GET", "/users", rbac.UsersRead},
+		{"POST", "/users", rbac.UsersWrite},
 		{"PUT", "/users/" + e.member.ID, rbac.UsersWrite},
 		{"PUT", "/users/" + e.viewer.ID, rbac.UsersWrite},
 		{"DELETE", "/users/" + e.admin.ID, rbac.UsersWrite},
