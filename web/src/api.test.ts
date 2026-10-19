@@ -29,12 +29,45 @@ describe('apiStream', () => {
         ),
       ),
     )
-    const promise = apiStream('/console/api/v1/playground/chat', { model: 'm' }, () => {}, signal())
+    const promise = apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, () => {}, signal())
     await expect(promise).rejects.toBeInstanceOf(ApiError)
     await expect(promise).rejects.toMatchObject({
       status: 429,
       message: 'daily budget exceeded',
       code: 'budget_exceeded',
+    })
+  })
+
+  it('keeps the server message for a 5xx that carries a gateway error code', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'upstream exploded', type: 'api_error', code: 'upstream_error' } }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    await expect(apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, () => {}, signal())).rejects.toMatchObject({
+      status: 502,
+      message: 'upstream exploded',
+      code: 'upstream_error',
+    })
+  })
+
+  it('still labels a plain 5xx without a code as internal error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'boom' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    await expect(apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, () => {}, signal())).rejects.toMatchObject({
+      status: 500,
+      message: 'internal error',
     })
   })
 
@@ -50,7 +83,7 @@ describe('apiStream', () => {
       ),
     )
     const seen: unknown[] = []
-    const out = await apiStream('/console/api/v1/playground/chat', { model: 'm' }, (d) => seen.push(d), signal())
+    const out = await apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, (d) => seen.push(d), signal())
     expect(out.status).toBe(200)
     expect(seen).toEqual([{ n: 1 }, { n: 2 }])
   })
@@ -65,7 +98,7 @@ describe('apiStream', () => {
     vi.stubGlobal('fetch', fetchMock)
     const seen: unknown[] = []
     const out = await apiStream(
-      '/console/api/v1/playground/chat',
+      '/console/api/v1/playground/chat/completions',
       { model: 'm', stream: false },
       (d) => seen.push(d),
       signal(),
@@ -73,7 +106,7 @@ describe('apiStream', () => {
     expect(out.status).toBe(200)
     expect(seen).toEqual([{ id: 'cmpl-1', choices: [] }])
     expect(fetchMock).toHaveBeenCalledWith(
-      '/console/api/v1/playground/chat',
+      '/console/api/v1/playground/chat/completions',
       expect.objectContaining({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -85,7 +118,7 @@ describe('apiStream', () => {
   it('flushes a final event that lacks its trailing blank line', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse(['data: {"n":1}\n\n', 'data: {"n":2}'])))
     const seen: unknown[] = []
-    await apiStream('/console/api/v1/playground/chat', { model: 'm' }, (d) => seen.push(d), signal())
+    await apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, (d) => seen.push(d), signal())
     expect(seen).toEqual([{ n: 1 }, { n: 2 }])
   })
 
@@ -96,7 +129,7 @@ describe('apiStream', () => {
         new Response('<html>proxy error</html>', { status: 200, headers: { 'content-type': 'application/json' } }),
       ),
     )
-    await expect(apiStream('/console/api/v1/playground/chat', {}, () => {}, signal())).rejects.toMatchObject({
+    await expect(apiStream('/console/api/v1/playground/chat/completions', {}, () => {}, signal())).rejects.toMatchObject({
       status: 200,
       message: 'invalid JSON from server',
     })
@@ -106,7 +139,7 @@ describe('apiStream', () => {
     const assign = vi.fn()
     vi.stubGlobal('window', { location: { pathname: '/playground', search: '?a=b', assign } })
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })))
-    await expect(apiStream('/console/api/v1/playground/chat', {}, () => {}, signal())).rejects.toMatchObject({
+    await expect(apiStream('/console/api/v1/playground/chat/completions', {}, () => {}, signal())).rejects.toMatchObject({
       status: 401,
       message: 'signed out',
     })

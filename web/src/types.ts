@@ -204,17 +204,23 @@ export interface GateInfo {
 }
 
 // One column of one playground turn. replies[i] lines up with models[i];
-// null = not run (or still running). error holds the failure text when the
-// run failed (e.g. the budget_exceeded code).
+// null = not run (or still running). error holds the display text when the
+// run failed (status · message, or the budget block copy). tin/tout/costNanos
+// are null when no usage was reported; request is the exact body that was
+// sent (for the Raw view and Copy as cURL); id/finishReason come from the
+// response (success replies only).
 export interface Reply {
   model: string
   text: string
-  tin: number
-  tout: number
-  costNanos: number
+  tin: number | null
+  tout: number | null
+  costNanos: number | null
   ms: number
   ttft: number
   error?: string
+  id?: string
+  finishReason?: string
+  request?: object // the exact /playground/chat/completions body that was sent
 }
 
 export interface Turn {

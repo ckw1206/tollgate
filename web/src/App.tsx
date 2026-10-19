@@ -13,11 +13,13 @@ import Keys from './pages/Keys'
 import Landing from './pages/Landing'
 import Models from './pages/Models'
 import People from './pages/People'
+import Playground from './pages/Playground'
 import Settings from './pages/Settings'
 import SignIn from './pages/SignIn'
 
 // Tabs are routes too (see MODEL_TABS / PEOPLE_TABS in Layout).
 const pages = [
+  { path: 'playground', perm: 'playground:use', el: <Playground /> },
   { path: 'keys', perm: 'keys:read_own', el: <Keys /> },
   { path: 'models', perm: 'models:read', el: <Models /> },
   { path: 'models/credentials', perm: 'models:write', el: <Credentials /> },
