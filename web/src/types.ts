@@ -170,3 +170,63 @@ export interface Me {
   permissions: string[]
   server: ServerInfo
 }
+
+// Playground (session-scoped, no API key). GET /playground/models: the enabled
+// models the caller may try, with prices for client-side cost (micro-USD per
+// 1M tokens; spend is nano-USD).
+export interface PlaygroundModel {
+  id: string
+  name: string
+  provider: Model['provider']
+  price_input_micros: number
+  price_output_micros: number
+  price_cache_read_micros: number | null
+  price_cache_write_micros: number | null
+}
+
+// The caller's tightest budget = their group's limits.
+export interface GateBudget {
+  budget_type: BudgetType
+  budget_nanos: number
+  spend_nanos: number
+  budget_reset_at: string | null
+}
+
+// Gate bar, polled every 15 s. providers_total = distinct providers of the
+// enabled models; providers_down = those whose last >= 3 requests in the past
+// 5 minutes all came back >= 500.
+export interface GateInfo {
+  budget: GateBudget | null
+  providers_total: number
+  providers_down: number
+}
+
+// One column of one playground turn. replies[i] lines up with models[i];
+// null = not run (or still running). error holds the failure text when the
+// run failed (e.g. the budget_exceeded code).
+export interface Reply {
+  model: string
+  text: string
+  tin: number
+  tout: number
+  costNanos: number
+  ms: number
+  ttft: number
+  error?: string
+}
+
+export interface Turn {
+  user: string
+  replies: (Reply | null)[]
+}
+
+// A playground session: up to 3 model columns, one prompt per turn.
+export interface SessionData {
+  models: string[]
+  system: string
+  temperature: number
+  top_p: number
+  max_tokens: number
+  stream: boolean
+  turns: Turn[]
+}
