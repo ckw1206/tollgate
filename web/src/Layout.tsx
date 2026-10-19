@@ -82,9 +82,17 @@ export function Version({ server }: { server: ServerInfo }) {
   )
 }
 
-function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate?: () => void }) {
+// mode/setMode come from the single useTheme() in Layout: Identity renders
+// twice (CSS-hidden sidebar copy + mobile drawer), and per-instance state
+// would let the two copies disagree — and each would keep its own
+// matchMedia listener alive.
+function Identity({ onSignOut, onNavigate, mode, setMode }: {
+  onSignOut: () => void
+  onNavigate?: () => void
+  mode: ThemePref
+  setMode: (m: ThemePref) => void
+}) {
   const { me } = useAuth()
-  const [mode, setMode] = useTheme()
   if (!me) return null
   return (
     <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
@@ -120,6 +128,10 @@ const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2)
 export default function Layout() {
   const { me, can, logout: signOut } = useAuth()
   const [menu, setMenu] = useState(false)
+  // One theme instance per page, shared by both Identity copies (drawer +
+  // sidebar): per-instance state would let them diverge, and each instance's
+  // matchMedia listener could overwrite a pick made in the other.
+  const [mode, setMode] = useTheme()
   useUnboot()
   if (!me) return null
   const items = nav.filter((n) => can(n.perm))
@@ -149,7 +161,7 @@ export default function Layout() {
             </button>
             {menu && (
               <div className="absolute right-0 top-10 z-40 w-64 border border-border bg-background p-4 shadow-dialog">
-                <Identity onSignOut={signOut} onNavigate={() => setMenu(false)} />
+                <Identity onSignOut={signOut} onNavigate={() => setMenu(false)} mode={mode} setMode={setMode} />
               </div>
             )}
           </div>
@@ -174,7 +186,7 @@ export default function Layout() {
           ))}
         </nav>
         <div className="hidden border-t border-sidebar-border px-4 py-3 md:block">
-          <Identity onSignOut={signOut} />
+          <Identity onSignOut={signOut} mode={mode} setMode={setMode} />
         </div>
       </aside>
       <main className="min-w-0 flex-1 p-4 md:p-8">

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link, matchPath, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { sparkPoints } from '../sparkline'
 import { applyState, groupByProvider, initialPickerState, triggerSummary, type PickerMode, type PickerModel } from './modelPicker'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
@@ -278,21 +279,16 @@ export function Skeleton({ className = 'h-3 w-24' }: { className?: string }) {
   return <span aria-hidden className={`block animate-pulse rounded-sm bg-muted ${className}`} />
 }
 
-// Sparkline: a 100×24 SVG trend for a stat card. Min–max normalised; a flat
-// series (including all zeros) draws as a single mid-height line.
+// Sparkline: a 100×24 SVG trend for a stat card (geometry in ../sparkline.ts).
 export function Sparkline({ points, tone }: { points: number[]; tone: 'primary' | 'muted' }) {
   const stroke = tone === 'primary' ? 'var(--primary)' : 'var(--muted-foreground)'
   const W = 100
   const H = 24
-  const pad = 1
-  if (points.length < 2) return null
-  const max = Math.max(...points)
-  const min = Math.min(...points)
-  const y = (v: number) => (min === max ? (H - 2 * pad) / 2 + pad : H - pad - ((v - min) / (max - min)) * (H - 2 * pad))
-  const pts = points.map((v, i) => `${(((i / (points.length - 1)) * (W - 2 * pad) + pad).toFixed(2))},${y(v).toFixed(2)}`)
+  const pts = sparkPoints(points, W, H)
+  if (!pts) return null
   return (
     <svg aria-hidden width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="shrink-0">
-      <polyline points={pts.join(' ')} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

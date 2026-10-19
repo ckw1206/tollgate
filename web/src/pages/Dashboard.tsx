@@ -363,7 +363,7 @@ export default function Dashboard() {
         </p>
       )}
       <div className="mb-4">
-        <ErrorText>{daily.error || byModel.error || recent.error || (admin ? byUser.error || byGroup.error : '')}</ErrorText>
+        <ErrorText>{daily.error || byModel.error || recent.error || spark.error || (admin ? byUser.error || byGroup.error : '')}</ErrorText>
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Spend" value={spend == null ? null : usd(spend)} spark={sparkPoints((r) => r.cost_nanos)} tone="primary" />
