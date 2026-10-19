@@ -7,6 +7,7 @@ import type { ServerInfo } from './types'
 // One layout for every role; nav items are filtered by permission. Order is fixed.
 const nav = [
   { to: '/', label: 'Dashboard', perm: 'spend:read_own' },
+  { to: '/playground', label: 'Playground', perm: 'playground:use' },
   { to: '/keys', label: 'API keys', perm: 'keys:read_own' },
   { to: '/models', label: 'Models', perm: 'models:read' },
   { to: '/people', label: 'Users & groups', perm: 'groups:read_own' },
