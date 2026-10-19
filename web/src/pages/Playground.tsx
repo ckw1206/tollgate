@@ -9,7 +9,9 @@ import {
   budgetWarnCopy,
   columnErrorText,
   curlFor,
+  forSave,
   rawResponseBody,
+  reseedSession,
   replyMeta,
   usageReply,
 } from '../playground'
@@ -96,6 +98,10 @@ export default function Playground() {
   const [session, setSession] = useState<SessionData>(emptySession)
   const [name, setName] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
+  // The session a pick is loading. The select shows it while the GET is in
+  // flight, but sessionId only commits together with the loaded data — so
+  // Save can never PUT session A's data to session B.
+  const [pendingId, setPendingId] = useState<string | null>(null)
   // The last saved (or loaded) snapshot; anything else is dirty. A fresh,
   // never-saved session is dirty only once there is something to save.
   const [saved, setSaved] = useState<{ name: string; data: SessionData } | null>(null)
@@ -127,13 +133,18 @@ export default function Playground() {
   }
   useEffect(() => abortAll, [])
 
-  // Whenever the session has no models but some are usable, take the first
-  // (initial load, "New", a saved empty session).
+  // Keep the session pointed at models that still exist: seed the first
+  // usable one when there are none (initial load, "New", a saved empty
+  // session) and re-seed a loaded session whose saved models are all gone
+  // (renamed or disabled since). reseedSession returns the same object
+  // while the list is valid, so this is a no-op on ordinary model reloads.
+  // Deps track the array identity (not its length): swapping to another
+  // saved session of the same length must still re-check.
   useEffect(() => {
     const m = models.data
-    if (!m?.length || session.models.length) return
-    setSession((s) => (s.models.length ? s : { ...s, models: [m[0]!.name] }))
-  }, [models.data, session.models.length])
+    if (!m?.length) return
+    setSession((s) => (s.models.length ? reseedSession(s, m) : { ...s, models: [m[0]!.name] }))
+  }, [models.data, session.models])
 
   const patch = (p: Partial<SessionData>) => setSession((s) => ({ ...s, ...p }))
   const setSlot = (i: number, model: string) =>
@@ -210,6 +221,10 @@ export default function Playground() {
       if (err instanceof ApiError) fail = { message: err.message, code: err.code, status: err.status }
       else fail = { message: (err as Error).message }
     }
+    // Stale (unmounted, or a newer action superseded this send): drop out
+    // before any UI side effect — an aborted stream must not unlock, refresh
+    // the gate or dispatch the refresh event.
+    if (seq !== seqRef.current || signal.aborted) return
     const ms = Math.round(performance.now() - t0)
     if (--pendingRef.current === 0) {
       // Every column of this send finished: unlock, then let the gate bar and
@@ -219,7 +234,6 @@ export default function Playground() {
       window.dispatchEvent(new Event('tollgate:gate-refresh'))
       void gate.reload()
     }
-    if (seq !== seqRef.current || signal.aborted) return // cleared/switched/unmounted: stale
     if (fail?.status === 401) return // signed out mid-run: the redirect owns the page
     const u = fail ? null : usageReply({ stream: s.stream, usage: st.usage, costHeader, model: info ?? null })
     const reply: Reply = {
@@ -271,24 +285,31 @@ export default function Playground() {
   }
 
   const pickSession = async (id: string) => {
-    if (!id || id === sessionId) return
+    if (!id || id === sessionId || pendingId) return // a pick is already in flight
     const n = ++pickSeqRef.current
     seqRef.current += 1
     abortAll()
     setLoadError('')
-    setSessionId(id) // the select shows the pick immediately, not after the GET
+    setPendingId(id) // the select shows the pick immediately, not after the GET
     try {
       const row = await api<SessionRow>(`${SESSIONS}/${id}`)
       if (n !== pickSeqRef.current) return // a newer pick (or New) superseded this GET
       const data = normalize(row.data)
+      // Commit the loaded session and its id together: the editor and the id
+      // can never disagree, so Save can't PUT this data to another session.
+      // (A session whose models are all stale is re-seeded by the effect.)
       setSession(data)
       setName(row.name)
       setSessionId(row.id)
       setSaved({ name: row.name, data })
+      setPendingId(null)
       setLive({})
       setBannerGone(null)
     } catch (e) {
-      if (n === pickSeqRef.current) setLoadError((e as Error).message)
+      if (n === pickSeqRef.current) {
+        setPendingId(null) // the select falls back to the loaded session
+        setLoadError((e as Error).message)
+      }
     }
   }
 
@@ -302,6 +323,7 @@ export default function Playground() {
     setSession(first ? { ...emptySession(), models: [first] } : emptySession())
     setName('')
     setSessionId(null)
+    setPendingId(null)
     setSaved(null)
     setLive({})
     setBannerGone(null)
@@ -319,16 +341,19 @@ export default function Playground() {
   const save = async () => {
     const n = name.trim()
     if (!n || saving) return
-    const data = session
+    // Persist only the last turn's requests (forSave): keeping the full
+    // history inside every reply would grow the payload quadratically and
+    // hit the server's 1 MiB body cap.
+    const body = forSave(session)
     setSaving(true)
     setSaveError('')
     try {
       const row = sessionId
-        ? await api<SessionRow>(`${SESSIONS}/${sessionId}`, { method: 'PUT', body: { name: n, data } })
-        : await api<SessionRow>(SESSIONS, { method: 'POST', body: { name: n, data } })
+        ? await api<SessionRow>(`${SESSIONS}/${sessionId}`, { method: 'PUT', body: { name: n, data: body } })
+        : await api<SessionRow>(SESSIONS, { method: 'POST', body: { name: n, data: body } })
       setSessionId(row.id)
       setName(row.name)
-      setSaved({ name: row.name, data })
+      setSaved({ name: row.name, data: session }) // the unsliced snapshot keeps dirty=false
       void list.reload()
     } catch (e) {
       setSaveError((e as Error).message)
@@ -338,9 +363,29 @@ export default function Playground() {
   }
 
   const modelById = new Map((models.data ?? []).map((m) => [m.name, m]))
-  const colTotal = (slot: number) => session.turns.reduce((sum, t) => sum + (t.replies[slot]?.costNanos ?? 0), 0)
+  // The running total for one column; any reply with an unknown cost
+  // (streamed without a usage chunk) would undercount it, so flag it with +.
+  const colTotal = (slot: number): string => {
+    let sum = 0
+    let unknown = false
+    for (const t of session.turns) {
+      const r = t.replies[slot]
+      if (!r) continue
+      if (r.costNanos == null) unknown = true
+      else sum += r.costNanos
+    }
+    return usd(sum) + (unknown ? '+' : '')
+  }
   const usable = models.data ?? []
-  const usableNote = usable.length ? (can('models:write') ? `${usable.length} enabled models.` : `${usable.length} models you can use.`) : ''
+  const usableNote = usable.length
+    ? can('models:write')
+      ? usable.length === 1
+        ? '1 enabled model.'
+        : `${usable.length} enabled models.`
+      : usable.length === 1
+        ? '1 model you can use.'
+        : `${usable.length} models you can use.`
+    : ''
   const canSend = prompt.trim() !== '' && session.models.length > 0 && !running && level !== 'block'
   const placeholder =
     level === 'block'
@@ -356,7 +401,7 @@ export default function Playground() {
         <div className="font-mono text-[11px] text-muted-foreground">{modelById.get(session.models[slot])?.provider ?? '—'}</div>
       </div>
       <div className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground" title="Total for this column">
-        {usd(colTotal(slot))}
+        {colTotal(slot)}
       </div>
     </div>
   )
@@ -369,10 +414,9 @@ export default function Playground() {
     const streaming = !r && lv !== undefined && i === session.turns.length - 1
     return (
       <div key={i}>
-        <div className="mb-1.5 flex justify-end">
-          <span className="max-w-[90%] whitespace-pre-wrap break-words rounded-md bg-secondary px-2.5 py-1.5 text-[13px] text-secondary-foreground">
-            You {t.user}
-          </span>
+        <div className="mb-1.5 flex flex-col items-end gap-1">
+          <span className={labelCls}>You</span>
+          <span className="max-w-[90%] whitespace-pre-wrap break-words rounded-md bg-secondary px-2.5 py-1.5 text-[13px] text-secondary-foreground">{t.user}</span>
         </div>
         {streaming ? (
           <div className="whitespace-pre-wrap break-words text-[13px]">
@@ -409,15 +453,16 @@ export default function Playground() {
             <select
               aria-label="Saved sessions"
               className={inputCls + ' bg-background'}
-              value={sessionId ?? ''}
+              value={pendingId ?? sessionId ?? ''}
               onChange={(e) => {
+                if (pendingId) return // a pick is in flight
                 if (e.target.value === '') {
                   if (sessionId !== null) newSession()
                   return
                 }
                 void pickSession(e.target.value)
               }}
-              disabled={running}
+              disabled={running || pendingId !== null}
             >
               <option value="">New session</option>
               {(list.data ?? []).map((s) => (
@@ -428,12 +473,13 @@ export default function Playground() {
             </select>
             <input className={inputCls} aria-label="Session name" placeholder="Untitled" maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
             <div className="mt-2 flex items-center gap-2">
-              {/* Disabled while running: saving mid-run would persist the
-                  in-flight turn's null replies as "Not run". */}
-              <Button size="sm" onClick={() => void save()} disabled={saving || running || !dirty || !name.trim()}>
+              {/* Disabled while running (saving mid-run would persist the
+                  in-flight turn's null replies as "Not run") and while a
+                  pick is pending (sessionId could disagree with the editor). */}
+              <Button size="sm" onClick={() => void save()} disabled={saving || running || pendingId !== null || !dirty || !name.trim()}>
                 {dirty ? 'Save' : 'Saved'}
               </Button>
-              <Button size="sm" variant="ghost" onClick={newSession} disabled={running}>
+              <Button size="sm" variant="ghost" onClick={newSession} disabled={running || pendingId !== null}>
                 New
               </Button>
               <span className="text-xs text-muted-foreground">Private to you.</span>
@@ -451,7 +497,7 @@ export default function Playground() {
                   className={controlCls + ' min-h-8 w-full bg-background px-2 py-1 text-[13px]'}
                   value={m}
                   onChange={(e) => setSlot(i, e.target.value)}
-                  disabled={running}
+                  disabled={running || pendingId !== null}
                 >
                   {!modelById.has(m) && (
                     <option value={m} disabled>
@@ -549,10 +595,12 @@ export default function Playground() {
             </Button>
           </div>
           <div className="min-h-[280px] flex-1 p-4">
-            {view === 'chat' && session.turns.length === 0 ? (
-              models.data === null || session.models.length === 0 ? (
-                // Models still loading, or "New" waiting for the preselect
-                // effect: a skeleton, never "no models available".
+            {session.turns.length === 0 ? (
+              // Same empty state for Chat and Raw (Raw only shows once there
+              // are turns): a skeleton while the model list is loading or a
+              // usable list hasn't seeded the session yet — never "no models
+              // available" while there is nothing to conclude from.
+              models.data === null || (usable.length > 0 && session.models.length === 0) ? (
                 <div className="flex flex-col gap-3 py-12">
                   {[0, 1, 2].map((i) => (
                     <Skeleton key={i} className="h-4 w-2/3 self-center" />

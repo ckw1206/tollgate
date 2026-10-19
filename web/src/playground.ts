@@ -56,7 +56,11 @@ export const usageReply = (args: {
   if (!u) return { tin: null, tout: null, costNanos: null }
   const tin = u.prompt_tokens ?? null
   const tout = u.completion_tokens ?? null
-  if (!args.stream) return { tin, tout, costNanos: toNanos(args.costHeader ?? '') }
+  if (!args.stream) {
+    // A missing header means the cost is unknown, not $0.
+    if (args.costHeader == null || args.costHeader === '') return { tin, tout, costNanos: null }
+    return { tin, tout, costNanos: toNanos(args.costHeader) }
+  }
   if (!args.model) return { tin, tout, costNanos: null }
   return {
     tin,
@@ -115,7 +119,37 @@ export const rawResponseBody = (r: Reply | null, streaming: boolean): string => 
   if (r.tin != null && r.tout != null) {
     body.usage = { prompt_tokens: r.tin, completion_tokens: r.tout, total_tokens: r.tin + r.tout }
   }
-  return `// 200 · x-tollgate-cost-nanos: ${r.costNanos ?? '-'}\n${JSON.stringify(body, null, 2)}`
+  return `// 200 · x-tollgate-cost-nanos: ${r.costNanos ?? '—'}\n${JSON.stringify(body, null, 2)}`
+}
+
+// A saved session may predate the current model set: if none of its models
+// are usable any more, fall back to the first usable one. A partially stale
+// list keeps its valid models (the stale ones render as disabled options),
+// and an empty list is seeded the same way.
+export const reseedSession = (data: SessionData, usable: PlaygroundModel[]): SessionData => {
+  if (!usable.length) return data
+  if (data.models.some((m) => usable.some((x) => x.name === m))) return data
+  return { ...data, models: [usable[0]!.name] }
+}
+
+// The session payload for save. The Raw view and Copy as cURL only read the
+// last turn's stored request, so persisting it on every reply would make the
+// payload grow quadratically (each request holds the whole history) and hit
+// the 1 MiB body cap; keep it only on the last turn and strip it from the
+// rest. Earlier turns fall back to buildRequest.
+export const forSave = (data: SessionData): SessionData => {
+  const last = data.turns.length - 1
+  return {
+    ...data,
+    turns: data.turns.map((t, i) =>
+      i === last
+        ? t
+        : {
+            ...t,
+            replies: t.replies.map((r) => (r && r.request ? { ...r, request: undefined } : r)),
+          },
+    ),
+  }
 }
 
 // >= 80% warns, >= 100% blocks; no budget (null or unlimited) is ok at 0.

@@ -7,7 +7,9 @@ import {
   columnErrorText,
   costNanos,
   curlFor,
+  forSave,
   rawResponseBody,
+  reseedSession,
   replyMeta,
   usageReply,
 } from './playground'
@@ -101,6 +103,11 @@ describe('usageReply', () => {
     const r = usageReply({ stream: false, usage: { prompt_tokens: 1000, completion_tokens: 500 }, costHeader: '0.0075', model: null })
     expect(r).toEqual({ tin: 1000, tout: 500, costNanos: 7_500_000 })
   })
+
+  it('non-stream: a missing header is unknown, not $0', () => {
+    const r = usageReply({ stream: false, usage: { prompt_tokens: 1000, completion_tokens: 500 }, costHeader: null, model: null })
+    expect(r).toEqual({ tin: 1000, tout: 500, costNanos: null })
+  })
 })
 
 describe('columnErrorText', () => {
@@ -180,10 +187,10 @@ describe('rawResponseBody', () => {
     ])
     expect(body.usage).toEqual({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 })
   })
-  it('unknown usage: no usage object, cost dashed', () => {
+  it('unknown usage: no usage object, cost dashed (—, like the footer)', () => {
     const r: Reply = { model: 'gpt-4o', text: 'hi', tin: null, tout: null, costNanos: null, ms: 1, ttft: 0 }
     const out = rawResponseBody(r, false)
-    expect(out.startsWith('// 200 · x-tollgate-cost-nanos: -')).toBe(true)
+    expect(out.startsWith('// 200 · x-tollgate-cost-nanos: —')).toBe(true)
     expect(JSON.parse(out.split('\n').slice(1).join('\n')).usage).toBeUndefined()
   })
 })
@@ -304,6 +311,65 @@ describe('buildRequest', () => {
     expect(req.messages[0]).toEqual({ role: 'user', content: 'Hello' })
     expect(req.stream).toBe(false)
     expect(req.stream_options).toBeUndefined()
+  })
+})
+
+describe('forSave', () => {
+  it('keeps request only on the last turn, strips it from earlier turns', () => {
+    const req = { model: 'gpt-4o', messages: [{ role: 'user' as const, content: 'hi' }], temperature: 0.7, top_p: 1, max_tokens: 512, stream: true }
+    const s = session()
+    s.turns[0].replies[0] = { ...s.turns[0].replies[0]!, request: req }
+    s.turns[1].replies = [
+      { model: 'gpt-4o', text: 'yo', tin: 3, tout: 2, costNanos: 100, ms: 10, ttft: 5, request: req },
+      { model: 'claude-sonnet', text: 'hey', tin: 4, tout: 1, costNanos: 200, ms: 20, ttft: 6, request: req },
+    ]
+    const out = forSave(s)
+    expect(out.turns[0].replies[0]?.request).toBeUndefined()
+    expect(out.turns[1].replies[0]?.request).toBe(req)
+    expect(out.turns[1].replies[1]?.request).toBe(req)
+    // The persisted payload has no request keys before the last turn.
+    expect(JSON.stringify(out.turns.slice(0, -1))).not.toContain('request')
+    // The input is not mutated.
+    expect(s.turns[0].replies[0]?.request).toBe(req)
+  })
+
+  it('leaves a session with no turns unchanged', () => {
+    const s = session()
+    s.turns = []
+    expect(forSave(s)).toEqual(s)
+  })
+
+  it('keeps null (not-run) slots as-is', () => {
+    const s = session()
+    const out = forSave(s)
+    expect(out.turns[0].replies[1]).toBeNull()
+  })
+})
+
+describe('reseedSession', () => {
+  const usable: PlaygroundModel[] = [
+    model,
+    { name: 'claude-sonnet', provider: 'anthropic', input_micros: 3_000_000, output_micros: 15_000_000, cache_read_micros: null, cache_write_micros: null },
+  ]
+  it('falls back to the first usable model when none of the saved ones remain', () => {
+    const s = session()
+    s.models = ['old-a', 'old-b']
+    expect(reseedSession(s, usable).models).toEqual(['GPT-4o'])
+  })
+  it('seeds an empty model list the same way', () => {
+    const s = session()
+    s.models = []
+    expect(reseedSession(s, usable).models).toEqual(['GPT-4o'])
+  })
+  it('keeps a list that still has a usable model (stale entries stay disabled)', () => {
+    const s = session()
+    s.models = ['old-a', 'GPT-4o']
+    expect(reseedSession(s, usable)).toBe(s)
+  })
+  it('leaves the session alone when nothing is usable', () => {
+    const s = session()
+    s.models = ['old-a']
+    expect(reseedSession(s, [])).toBe(s)
   })
 })
 
