@@ -77,20 +77,18 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Landing (/welcome): always light Mira over the illustrated backdrop. Sign in, setup and
-   invite (/login, /setup, /invite) use the plain base colour. */
-.landing-bg,
-.auth-bg {
-  background-color: #eceee6;
-}
-.landing-bg {
-  background-image: url('/landing-bg.webp');
-  background-size: cover;
-  background-position: center bottom;
-  background-repeat: no-repeat;
+/* Landing and auth pages (/welcome, /login, /setup, /invite): always dark Mira. The
+   toll-lane grid (lib/tollgateGrid.ts) renders into a fixed, non-interactive canvas that
+   sits under the shells' relative content blocks. */
+.tg-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
 }
 
 html.landing-boot,
 html.landing-boot body {
-  background: #eceee6;
+  background: oklch(0.145 0 0);
+  color: oklch(0.985 0 0);
+  color-scheme: dark;
 }
