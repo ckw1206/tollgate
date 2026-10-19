@@ -372,6 +372,57 @@ func (s *Store) DeleteSpendBefore(ctx context.Context, t time.Time) (int64, erro
 	return tag.RowsAffected(), err
 }
 
+// GateStats is the aggregate behind GET /console/api/v1/gate:
+//   - ProvidersTotal counts the distinct providers of the enabled models; a
+//     provider is down when it made >= 3 requests in the past 5 minutes and
+//     all of its latest three have http_status >= 500 (ProvidersUp = total - down).
+//   - RPM counts every user's requests in the past 60 seconds.
+//   - P50MS is the median latency_ms over the past 15 minutes, restricted to
+//     the caller's own rows unless userID is "" (spend:read_all); nil when the
+//     window has no rows.
+type GateStats struct {
+	ProvidersUp    int
+	ProvidersTotal int
+	RPM            int64
+	P50MS          *int64
+}
+
+func (s *Store) GateStats(ctx context.Context, userID string) (*GateStats, error) {
+	var g GateStats
+	err := s.pool.QueryRow(ctx, `
+		WITH enabled AS (SELECT DISTINCT provider FROM models WHERE enabled),
+		recent AS (
+			SELECT provider,
+			       count(*) AS cnt,
+			       count(*) FILTER (WHERE rn <= 3 AND http_status >= 500) AS last3_bad
+			FROM (
+				SELECT provider, http_status,
+				       row_number() OVER (PARTITION BY provider ORDER BY created_at DESC, id DESC) AS rn
+				FROM spend_logs
+				WHERE created_at >= now() - interval '5 minutes'
+			) r
+			GROUP BY provider
+		)
+		SELECT count(*), count(*) - count(*) FILTER (WHERE c.cnt >= 3 AND c.last3_bad = 3)
+		FROM enabled e
+		LEFT JOIN recent c ON c.provider = e.provider::text`).Scan(&g.ProvidersTotal, &g.ProvidersUp)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM spend_logs WHERE created_at >= now() - interval '1 minute'`).Scan(&g.RPM); err != nil {
+		return nil, err
+	}
+	if err := s.pool.QueryRow(ctx, `
+		SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms))::bigint
+		FROM spend_logs
+		WHERE created_at >= now() - interval '15 minutes' AND ($1 = '' OR user_id::text = $1)`,
+		userID).Scan(&g.P50MS); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
 const spendWhere = `WHERE created_at >= $1 AND created_at < $2
 	AND ($3 = '' OR user_id::text = $3) AND ($4 = '' OR group_id::text = $4) AND ($5 = '' OR key_id::text = $5)`
 
