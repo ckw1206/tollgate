@@ -10,7 +10,10 @@ import (
 )
 
 type SpendRecord struct {
+	// KeyID empty (key-less, e.g. playground) is stored as NULL and charges
+	// the group only; Source marks the origin ("api" default, "playground").
 	KeyID            string    `json:"key_id"`
+	Source           string    `json:"source"`
 	UserID           string    `json:"user_id"`
 	GroupID          string    `json:"group_id"`
 	ModelID          string    `json:"model_id"`
@@ -91,14 +94,21 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	rows := make([][]any, len(recs))
 	keySet, groupSet := map[string]bool{}, map[string]bool{}
 	for i, r := range recs {
-		var errMsg any
+		var keyID, errMsg any
+		if r.KeyID != "" {
+			keyID = r.KeyID
+			keySet[r.KeyID] = true
+		}
 		if r.ErrorMessage != "" {
 			errMsg = r.ErrorMessage
 		}
-		rows[i] = []any{r.KeyID, r.UserID, r.GroupID, r.ModelID, r.ModelName, r.Provider,
+		source := r.Source
+		if source == "" {
+			source = "api"
+		}
+		rows[i] = []any{keyID, r.UserID, r.GroupID, r.ModelID, r.ModelName, r.Provider,
 			r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheWriteTokens, r.CostNanos,
-			r.LatencyMS, r.Status, r.HTTPStatus, errMsg, r.CreatedAt}
-		keySet[r.KeyID] = true
+			r.LatencyMS, r.Status, r.HTTPStatus, errMsg, r.CreatedAt, source}
 		groupSet[r.GroupID] = true
 	}
 
@@ -124,7 +134,7 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"spend_logs"}, []string{
 		"key_id", "user_id", "group_id", "model_id", "model_name", "provider",
 		"input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_nanos",
-		"latency_ms", "status", "http_status", "error_message", "created_at"}, pgx.CopyFromRows(rows)); err != nil {
+		"latency_ms", "status", "http_status", "error_message", "created_at", "source"}, pgx.CopyFromRows(rows)); err != nil {
 		return nil, fmt.Errorf("copy spend_logs: %w", err)
 	}
 	keyRolled, err := rollSpend(ctx, tx, "api_keys", keyLims, keyCost, now)
@@ -397,7 +407,7 @@ func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, erro
 		"model,week":  `model_name`,
 		"model,month": `model_name`,
 		"model,year":  `model_name`,
-		"key":         `key_id::text`,
+		"key":         `COALESCE(key_id::text,'playground')`,
 		"user":        `user_id::text`,
 		"group":       `group_id::text`,
 	}[f.GroupBy]
@@ -439,14 +449,15 @@ func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, erro
 }
 
 // RecentSpend returns the newest logs in the filter, with the key's alias and prefix and the
-// owner's email. spend_logs is limited in a subquery first, so spendWhere's columns stay unambiguous.
+// owner's email. Key-less (playground) rows show up as the "Playground" key with a "session"
+// prefix. spend_logs is limited in a subquery first, so spendWhere's columns stay unambiguous.
 func (s *Store) RecentSpend(ctx context.Context, f SpendFilter, limit int) ([]SpendLog, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT l.id, l.key_id, l.user_id, l.group_id, l.model_id, l.model_name, l.provider, l.input_tokens, l.output_tokens,
-			l.cache_read_tokens, l.cache_write_tokens, l.cost_nanos, l.latency_ms, l.status, l.http_status, COALESCE(l.error_message, ''), l.created_at,
-			k.alias, k.key_prefix, u.email
+			l.cache_read_tokens, l.cache_write_tokens, l.cost_nanos, l.latency_ms, l.status, l.http_status, COALESCE(l.error_message, ''), l.created_at, l.source,
+			COALESCE(k.alias, 'Playground'), COALESCE(k.key_prefix, 'session'), u.email
 		FROM (SELECT * FROM spend_logs `+spendWhere+` ORDER BY created_at DESC, id DESC LIMIT $6) l
-		JOIN api_keys k ON k.id = l.key_id JOIN users u ON u.id = l.user_id
+		LEFT JOIN api_keys k ON k.id = l.key_id JOIN users u ON u.id = l.user_id
 		ORDER BY l.created_at DESC, l.id DESC`,
 		f.From, f.To, f.UserID, f.GroupID, f.KeyID, limit)
 	if err != nil {
@@ -456,10 +467,14 @@ func (s *Store) RecentSpend(ctx context.Context, f SpendFilter, limit int) ([]Sp
 	var out []SpendLog
 	for rows.Next() {
 		var l SpendLog
-		if err := rows.Scan(&l.ID, &l.KeyID, &l.UserID, &l.GroupID, &l.ModelID, &l.ModelName, &l.Provider,
+		var keyID *string
+		if err := rows.Scan(&l.ID, &keyID, &l.UserID, &l.GroupID, &l.ModelID, &l.ModelName, &l.Provider,
 			&l.InputTokens, &l.OutputTokens, &l.CacheReadTokens, &l.CacheWriteTokens, &l.CostNanos,
-			&l.LatencyMS, &l.Status, &l.HTTPStatus, &l.ErrorMessage, &l.CreatedAt, &l.KeyAlias, &l.KeyPrefix, &l.OwnerEmail); err != nil {
+			&l.LatencyMS, &l.Status, &l.HTTPStatus, &l.ErrorMessage, &l.CreatedAt, &l.Source, &l.KeyAlias, &l.KeyPrefix, &l.OwnerEmail); err != nil {
 			return nil, err
+		}
+		if keyID != nil {
+			l.KeyID = *keyID
 		}
 		out = append(out, l)
 	}
