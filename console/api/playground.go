@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"tollgate/console/auth"
 	"tollgate/core/api"
@@ -82,10 +83,11 @@ type sessionInput struct {
 }
 
 // validSessionInput mirrors the column constraints so bad bodies are 400s:
-// name is 1-120 characters, and data is a JSON object (the console's own
+// name is 1-120 characters (utf8.RuneCountInString, matching the DB CHECK's
+// character count, not bytes), and data is a JSON object (the console's own
 // state) or absent.
 func validSessionInput(w http.ResponseWriter, in sessionInput) bool {
-	if len(in.Name) == 0 || len(in.Name) > 120 {
+	if n := utf8.RuneCountInString(in.Name); n == 0 || n > 120 {
 		badRequest(w, "name must be 1-120 characters")
 		return false
 	}

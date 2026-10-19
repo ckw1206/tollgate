@@ -119,7 +119,7 @@ export const rawResponseBody = (r: Reply | null, streaming: boolean): string => 
   if (r.tin != null && r.tout != null) {
     body.usage = { prompt_tokens: r.tin, completion_tokens: r.tout, total_tokens: r.tin + r.tout }
   }
-  return `// 200 · x-tollgate-cost-nanos: ${r.costNanos ?? '—'}\n${JSON.stringify(body, null, 2)}`
+  return `// 200 · cost (nanos): ${r.costNanos ?? '—'}\n${JSON.stringify(body, null, 2)}`
 }
 
 // A saved session may predate the current model set: if none of its models

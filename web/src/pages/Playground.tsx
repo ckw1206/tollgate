@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, api, apiStream, usd } from '../api'
 import { useAuth } from '../auth'
+import { useGate } from '../components/GateBar'
 import { Banner, Button, CheckButton, CopyButton, controlCls, ErrorText, inputCls, PageHeader, Segmented, Skeleton, useLoad } from '../components/ui'
 import {
   buildRequest,
@@ -16,7 +17,7 @@ import {
   saveBody,
   usageReply,
 } from '../playground'
-import type { GateBudget, GateInfo, PlaygroundModel, Reply, SessionData, Turn } from '../types'
+import type { GateBudget, PlaygroundModel, Reply, SessionData, Turn } from '../types'
 
 // The playground runs through the console session (no API key): one POST per
 // column, key-less principal, the user's group as billing scope.
@@ -94,7 +95,11 @@ function MaxTokensInput({ value, onCommit, disabled = false }: { value: number; 
 export default function Playground() {
   const { can } = useAuth()
   const models = useLoad<PlaygroundModel[]>('/console/api/v1/playground/models')
-  const gate = useLoad<GateInfo>('/console/api/v1/gate')
+  // Live gate state (15 s poll, refresh event, tab-visibility): the budget
+  // banners and the composer gate off this, and it must unstick itself once
+  // a blocked budget is raised or a daily window resets — no send can finish
+  // while blocked, so a one-shot load would stay stale until a page reload.
+  const { gate } = useGate()
   const list = useLoad<SessionMeta[]>(SESSIONS)
 
   const [session, setSession] = useState<SessionData>(emptySession)
@@ -119,7 +124,9 @@ export default function Playground() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [loadError, setLoadError] = useState('')
-  const [bannerGone, setBannerGone] = useState<'warn' | 'block' | null>(null)
+  // The warn banner can be dismissed for the page's lifetime; the block
+  // banner cannot (it mirrors the live gate state).
+  const [bannerGone, setBannerGone] = useState<'warn' | null>(null)
 
   // seq invalidates in-flight finishers (clear/new/switch bump it); pending
   // counts the columns of the current send so the UI unlocks exactly once;
@@ -172,7 +179,7 @@ export default function Playground() {
       turns: s.turns.map((t) => ({ ...t, replies: t.replies.filter((_, j) => j !== i) })),
     }))
 
-  const budget: GateBudget | null = gate.data?.budget ?? null
+  const budget: GateBudget | null = gate?.budget ?? null
   const { pct, level } = budgetState(budget)
   const budgetText = budget ? budgetBlockCopy(budget) : 'Daily budget reached.'
 
@@ -233,8 +240,9 @@ export default function Playground() {
       // the budget banners below pick up the new spend.
       setRunning(false)
       setLive({})
+      // useGate (gate bar, banners) re-polls on this event; there is no local
+      // gate load to reload any more.
       window.dispatchEvent(new Event('tollgate:gate-refresh'))
-      void gate.reload()
     }
     if (fail?.status === 401) return // signed out mid-run: the redirect owns the page
     const u = fail ? null : usageReply({ stream: s.stream, usage: st.usage, costHeader, model: info ?? null })
@@ -457,7 +465,7 @@ export default function Playground() {
         description="Try the models you're allowed to use — no API key needed. Runs as you and counts toward your budget."
       />
       <div className="mb-4">
-        <ErrorText>{models.error || list.error || gate.error || loadError}</ErrorText>
+        <ErrorText>{models.error || list.error || loadError}</ErrorText>
       </div>
       <div className="grid items-start gap-4 md:grid-cols-[272px_minmax(0,1fr)]">
         <aside className="flex flex-col gap-5 rounded-lg border border-border bg-card p-4">
@@ -692,7 +700,15 @@ export default function Playground() {
           <div className="border-t border-border p-4">
             {level !== 'ok' && budget && bannerGone !== level && (
               <div className="mb-2">
-                <Banner onDismiss={() => setBannerGone(level)}>{level === 'warn' ? budgetWarnCopy(budget, pct) : budgetBlockCopy(budget)}</Banner>
+                {level === 'warn' ? (
+                  <Banner tone="warning" onDismiss={() => setBannerGone(level)}>
+                    {budgetWarnCopy(budget, pct)}
+                  </Banner>
+                ) : (
+                  // A blocked budget is not dismissable: the composer is
+                  // disabled until the (live) gate state says otherwise.
+                  <Banner tone="error">{budgetBlockCopy(budget)}</Banner>
+                )}
               </div>
             )}
             <div className="flex items-end gap-2">

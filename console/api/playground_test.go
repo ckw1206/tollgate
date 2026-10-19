@@ -205,6 +205,26 @@ func TestPlaygroundSessions_CRUDAndIsolation(t *testing.T) {
 	}
 }
 
+// TestPlaygroundSessions_NameLengthCountsCharacters: the 1-120 check counts
+// characters like the DB CHECK (length()), not bytes — a 60-character CJK
+// name is 180 bytes and must be accepted, 121 characters must not.
+func TestPlaygroundSessions_NameLengthCountsCharacters(t *testing.T) {
+	e := newTenv(t)
+	cjk60 := strings.Repeat("测", 60)
+	w := e.as("member@x.io", "POST", p+"/playground/sessions", map[string]any{"name": cjk60, "data": map[string]any{}})
+	if w.Code != 201 {
+		t.Fatalf("create 60-char (180-byte) CJK name: %d %s, want 201", w.Code, w.Body)
+	}
+	created := decodeInto[repo.PlaygroundSession](t, w)
+	if w := e.as("member@x.io", "PUT", p+"/playground/sessions/"+created.ID, map[string]any{"name": cjk60, "data": map[string]any{}}); w.Code != 200 {
+		t.Fatalf("update 60-char CJK name: %d %s, want 200", w.Code, w.Body)
+	}
+	cjk121 := strings.Repeat("测", 121)
+	if w := e.as("member@x.io", "POST", p+"/playground/sessions", map[string]any{"name": cjk121, "data": map[string]any{}}); w.Code != 400 {
+		t.Fatalf("create 121-char CJK name: %d, want 400", w.Code)
+	}
+}
+
 func errCode(t *testing.T, w *httptest.ResponseRecorder) string {
 	t.Helper()
 	var b struct{ Error struct{ Code string } }

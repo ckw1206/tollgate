@@ -41,12 +41,19 @@ export function Button({ variant = 'primary', size = 'md', className = '', ...pr
   )
 }
 
-// Banner: a dismissible success notice at the top of a page.
-export function Banner({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }) {
+// Banner: a notice at the top of a page. Tones: success (default), warning
+// (role status) and error (role alert); dismissible only when onDismiss is
+// given (no × otherwise).
+export function Banner({ children, tone = 'success', onDismiss }: { children: ReactNode; tone?: 'success' | 'warning' | 'error'; onDismiss?: () => void }) {
+  const tones = {
+    success: 'bg-success text-success-foreground',
+    warning: 'bg-warning text-warning-foreground',
+    error: 'bg-error text-error-foreground',
+  }
   return (
-    <div role="status" className="flex items-center justify-between gap-4 bg-success px-3.5 py-2.5 text-sm text-success-foreground">
+    <div role={tone === 'error' ? 'alert' : 'status'} className={`flex items-center justify-between gap-4 px-3.5 py-2.5 text-sm ${tones[tone]}`}>
       <span>{children}</span>
-      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="px-1 text-base leading-none hover:opacity-70">×</button>
+      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss} className="px-1 text-base leading-none hover:opacity-70">×</button>}
     </div>
   )
 }

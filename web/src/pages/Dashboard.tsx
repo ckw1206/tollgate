@@ -320,7 +320,7 @@ export default function Dashboard() {
   const chart = span.buckets.map((b) => ({ bucket: b, usd: (byBucket.get(b) ?? 0) / 1e9 }))
   // Sparkline series, zero-filled for days without spend.
   const sparkByBucket = new Map((spark.data?.rows ?? []).map((r) => [r.bucket, r]))
-  const sparkPoints = (f: (r: SpendRow) => number) => (spark.data ? spark30.buckets.map((b) => f(sparkByBucket.get(b) ?? ZERO_ROW)) : null)
+  const sparkSeries = (f: (r: SpendRow) => number) => (spark.data ? spark30.buckets.map((b) => f(sparkByBucket.get(b) ?? ZERO_ROW)) : null)
 
   // Empty dashboard without the checklist (members and viewers): a next step, never a dead end.
   // "Yet" copy only when nothing has ever been recorded; a quiet range says "in this period".
@@ -366,9 +366,9 @@ export default function Dashboard() {
         <ErrorText>{daily.error || byModel.error || recent.error || spark.error || (admin ? byUser.error || byGroup.error : '')}</ErrorText>
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="Spend" value={spend == null ? null : usd(spend)} spark={sparkPoints((r) => r.cost_nanos)} tone="primary" />
-        <Stat label="Requests" value={requests == null ? null : fmt.format(requests)} spark={sparkPoints((r) => r.requests)} />
-        <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} spark={sparkPoints((r) => r.input_tokens + r.output_tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
+        <Stat label="Spend" value={spend == null ? null : usd(spend)} spark={sparkSeries((r) => r.cost_nanos)} tone="primary" />
+        <Stat label="Requests" value={requests == null ? null : fmt.format(requests)} spark={sparkSeries((r) => r.requests)} />
+        <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} spark={sparkSeries((r) => r.input_tokens + r.output_tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title={`Spend per ${span.granularity} (USD)`}>

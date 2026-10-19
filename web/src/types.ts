@@ -194,7 +194,8 @@ export interface GateBudget {
 // GET /console/api/v1/gate, polled every 15 s. providers_up of
 // providers_total: distinct providers of the enabled models; a provider is
 // down when its last >= 3 requests in the past 5 minutes all came back >= 500.
-// rpm is the caller's group rate limit; p50_ms the recent latency.
+// rpm is requests in the last 60 s across all users; only for spend:read_all,
+// else null; p50_ms the recent latency.
 export interface GateInfo {
   providers_up: number
   providers_total: number

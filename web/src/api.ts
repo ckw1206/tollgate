@@ -148,7 +148,7 @@ export async function apiStream(
     const { events, rest } = parseSSE(buffer)
     buffer = rest
     if (sseFeed(events, onEvent)) {
-      void reader.cancel() // [DONE]: stop reading, release the connection
+      reader.cancel().catch(() => {}) // [DONE]: stop reading, release the connection
       return { status: res.status, headers: res.headers }
     }
   }

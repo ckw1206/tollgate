@@ -4,9 +4,10 @@ import type { GateInfo } from '../types'
 
 // The one-line status bar above every console page header: gateway health,
 // provider uptime, request rate, latency and the caller's budget meter.
-// useGate polls /health + /console/api/v1/gate every 15 s and re-polls on
-// the tollgate:gate-refresh window event, which the Playground dispatches
-// after each send so the spend picks up without waiting for the next tick.
+// useGate polls /health + /console/api/v1/gate every 15 s, re-polls on the
+// tollgate:gate-refresh window event (the Playground dispatches it after each
+// send) and immediately when a hidden tab becomes visible again, so stale
+// budget state — a block that has since reset — clears without a reload.
 
 const POLL_MS = 15_000
 
@@ -32,9 +33,16 @@ export function useGate() {
     const t = setInterval(() => void refresh(), POLL_MS)
     const onRefresh = () => void refresh()
     window.addEventListener('tollgate:gate-refresh', onRefresh)
+    // Ticks are skipped while hidden, so a tab that sat hidden through a
+    // daily reset (or a budget raise) refreshes the moment it is shown.
+    const onVisible = () => {
+      if (!document.hidden) void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
     return () => {
       clearInterval(t)
       window.removeEventListener('tollgate:gate-refresh', onRefresh)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [refresh])
 

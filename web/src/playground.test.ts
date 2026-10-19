@@ -181,7 +181,7 @@ describe('rawResponseBody', () => {
     }
     const out = rawResponseBody(r, false)
     const [head, ...rest] = out.split('\n')
-    expect(head).toBe('// 200 · x-tollgate-cost-nanos: 7500000')
+    expect(head).toBe('// 200 · cost (nanos): 7500000')
     const body = JSON.parse(rest.join('\n'))
     expect(body.id).toBe('chatcmpl-1')
     expect(body.model).toBe('gpt-4o')
@@ -193,7 +193,7 @@ describe('rawResponseBody', () => {
   it('unknown usage: no usage object, cost dashed (—, like the footer)', () => {
     const r: Reply = { model: 'gpt-4o', text: 'hi', tin: null, tout: null, costNanos: null, ms: 1, ttft: 0 }
     const out = rawResponseBody(r, false)
-    expect(out.startsWith('// 200 · x-tollgate-cost-nanos: —')).toBe(true)
+    expect(out.startsWith('// 200 · cost (nanos): —')).toBe(true)
     expect(JSON.parse(out.split('\n').slice(1).join('\n')).usage).toBeUndefined()
   })
 })

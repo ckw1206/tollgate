@@ -192,7 +192,7 @@ export function LandingShell({ info, cta, preview = false }: {
       </main>
 
       <div className="relative flex shrink-0 items-end justify-end pl-[clamp(20px,4vw,48px)] pr-[clamp(20px,10vw,160px)] pb-[clamp(16px,5vh,56px)]">
-        <div className="flex flex-col items-end gap-1.5 text-right font-mono text-[13px] uppercase tracking-[0.04em]">
+        <div className="flex flex-col gap-1.5 font-mono text-[13px] uppercase tracking-[0.04em]">
           <span className="text-[11px] tracking-[0.14em] text-muted-foreground">Routes to</span>
           {ROUTES.map((r) => <span key={r}>{r}</span>)}
         </div>
