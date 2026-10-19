@@ -75,6 +75,12 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		badRequest(w, "password must be at least 12 characters")
 		return
 	}
+	if in.GroupID != nil {
+		if _, err := s.Store.GetGroup(r.Context(), *in.GroupID); err != nil {
+			badRequest(w, "unknown group")
+			return
+		}
+	}
 	before, err := s.Store.GetUser(r.Context(), id)
 	if err != nil {
 		storeErr(w, err)

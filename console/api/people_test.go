@@ -367,6 +367,18 @@ func TestModelAccess_StoredStaleNamesDontBlockSave(t *testing.T) {
 	}
 }
 
+func TestUsers_UpdateGroupMustExist(t *testing.T) {
+	e := newTenv(t)
+	path := "/console/api/v1/users/" + e.member.ID
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"group_id": "00000000-0000-0000-0000-000000000000"}); w.Code != 400 || !strings.Contains(w.Body.String(), "unknown group") {
+		t.Fatalf("unknown group: %d %s", w.Code, w.Body)
+	}
+	// a resolvable group (even the unchanged one) still saves
+	if w := e.as("admin@x.io", "PUT", path, map[string]any{"group_id": e.group.ID}); w.Code != 200 {
+		t.Fatalf("valid group: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestUsers_CannotChangeOwnModelAccess(t *testing.T) {
 	e := newTenv(t)
 	accessModels(e)
