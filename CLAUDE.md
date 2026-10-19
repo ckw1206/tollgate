@@ -35,7 +35,7 @@ A bare `go test ./...` without `TOLLGATE_TEST_DATABASE_URL` **skips** the DB-bac
 ## Web console (`web/`)
 
 - React 18 + react-router 7 + Tailwind v4 + Recharts, TypeScript strict. Built into `web/dist` and embedded by `web/embed.go`.
-- Only `api()` in `web/src/api.ts` calls `fetch`. Gate every nav item, column, button and field with `can(permission)` from `/auth/me`; never branch on `user.role`.
+- Only `api()`/`apiStream()` in `web/src/api.ts` call `fetch`. Gate every nav item, column, button and field with `can(permission)` from `/auth/me`; never branch on `user.role`.
 - Use only `web/src/components/ui.tsx` primitives. Colors, radii and fonts come from Alison UI tokens (`web/src/styles/alison.css`, mapped in `index.css`); no hex, `rgba()`, palette classes (`zinc-*`, `red-*`…) or `rounded-full` in `.ts/.tsx`, and no `alert()`/`confirm()`.
 - Tailwind v4 orders conflicting utilities by value, not by class-string position: don't narrow `inputCls` by appending (`+ ' mt-0'`); compose `controlCls` with the sizes you need.
 - Raw API keys and invite URLs appear once in `SecretDialog` and are dropped from state when it closes.

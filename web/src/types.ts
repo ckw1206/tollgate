@@ -170,3 +170,65 @@ export interface Me {
   permissions: string[]
   server: ServerInfo
 }
+
+// Playground (session-scoped, no API key). The enabled models the caller may
+// try, with prices for client-side cost (micro-USD per 1M tokens; spend is
+// nano-USD).
+export interface PlaygroundModel {
+  name: string
+  provider: Model['provider']
+  input_micros: number
+  output_micros: number
+  cache_read_micros: number | null
+  cache_write_micros: number | null
+}
+
+// The caller's tightest budget = their group's limits.
+export interface GateBudget {
+  type: BudgetType
+  budget_nanos: number
+  spend_nanos: number
+  reset_at: string | null
+}
+
+// GET /console/api/v1/gate, polled every 15 s. providers_up of
+// providers_total: distinct providers of the enabled models; a provider is
+// down when its last >= 3 requests in the past 5 minutes all came back >= 500.
+// rpm is the caller's group rate limit; p50_ms the recent latency.
+export interface GateInfo {
+  providers_up: number
+  providers_total: number
+  rpm: number | null
+  p50_ms: number | null
+  budget: GateBudget | null
+}
+
+// One column of one playground turn. replies[i] lines up with models[i];
+// null = not run (or still running). error holds the failure text when the
+// run failed (e.g. the budget_exceeded code).
+export interface Reply {
+  model: string
+  text: string
+  tin: number
+  tout: number
+  costNanos: number
+  ms: number
+  ttft: number
+  error?: string
+}
+
+export interface Turn {
+  user: string
+  replies: (Reply | null)[]
+}
+
+// A playground session: up to 3 model columns, one prompt per turn.
+export interface SessionData {
+  models: string[]
+  system: string
+  temperature: number
+  top_p: number
+  max_tokens: number
+  stream: boolean
+  turns: Turn[]
+}
