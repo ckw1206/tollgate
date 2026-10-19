@@ -1,5 +1,5 @@
-import { usd } from './api'
-import type { GateBudget, PlaygroundModel, SessionData } from './types'
+import { toNanos, usd, when } from './api'
+import type { GateBudget, PlaygroundModel, Reply, SessionData } from './types'
 
 // costNanos mirrors core/llm/cost.go: nano-USD = tokens * micros / 1000,
 // integer math only. prompt_tokens is the total (input + cache, as the
@@ -24,10 +24,99 @@ export const costNanos = (
 }
 
 // Reply footer: "98 in · 52 out · $0.003000 · 1,940 ms · TTFT 620 ms".
-export const replyMeta = (r: { tin: number; tout: number; costNanos: number; ms: number; ttft: number }): string =>
-  `${r.tin} in · ${r.tout} out · ${usd(r.costNanos)} · ${r.ms.toLocaleString('en-US')} ms · TTFT ${r.ttft.toLocaleString(
+// tin/tout/costNanos are null when no usage was reported: show —, not 0.
+export const replyMeta = (r: { tin: number | null; tout: number | null; costNanos: number | null; ms: number; ttft: number }): string =>
+  `${r.tin ?? '—'} in · ${r.tout ?? '—'} out · ${r.costNanos != null ? usd(r.costNanos) : '—'} · ${r.ms.toLocaleString('en-US')} ms · TTFT ${r.ttft.toLocaleString(
     'en-US',
   )} ms`
+
+// The usage chunk of a stream (OpenAI-shaped, prompt_tokens is the total) or
+// the usage object of a non-stream body.
+export interface UsageInfo {
+  prompt_tokens?: number
+  completion_tokens?: number
+  prompt_tokens_details?: { cached_tokens?: number }
+}
+
+// Reduce one column's outcome to {tin, tout, costNanos}.
+// - Tokens always come from the usage chunk; no chunk -> all unknown (null).
+// - Stream: streams carry no X-Tollgate-Cost, so the cost is computed
+//   client-side with the same integer formula as the server (costNanos,
+//   cached tokens at their own rate). No price info -> cost unknown (null),
+//   the tokens are still set.
+// - Non-stream: the server's X-Tollgate-Cost header, decimal USD like
+//   "0.0075", converted with toNanos (never float math on money).
+export const usageReply = (args: {
+  stream: boolean
+  usage: UsageInfo | null
+  costHeader: string | null
+  model: PlaygroundModel | null
+}): { tin: number | null; tout: number | null; costNanos: number | null } => {
+  const u = args.usage
+  if (!u) return { tin: null, tout: null, costNanos: null }
+  const tin = u.prompt_tokens ?? null
+  const tout = u.completion_tokens ?? null
+  if (!args.stream) return { tin, tout, costNanos: toNanos(args.costHeader ?? '') }
+  if (!args.model) return { tin, tout, costNanos: null }
+  return {
+    tin,
+    tout,
+    costNanos: costNanos(
+      { prompt_tokens: u.prompt_tokens ?? 0, completion_tokens: u.completion_tokens ?? 0, cache_read: u.prompt_tokens_details?.cached_tokens },
+      args.model,
+    ),
+  }
+}
+
+// The column message for a failed run: the budget block copy for 402 or the
+// budget_exceeded code (any transport: pre-stream status or in-stream
+// error chunk); otherwise "{status} · {message}" — the in-stream error chunk
+// has no status (the stream already went out as 200), so just the message.
+export const columnErrorText = (fail: { message: string; code?: string; status?: number } | null, budgetText: string): string | null => {
+  if (!fail) return null
+  if (fail.status === 402 || fail.code === 'budget_exceeded') return budgetText
+  return fail.status ? `${fail.status} · ${fail.message}` : fail.message
+}
+
+// Composer banner for >= 80% of a finite budget: "You've used 80% of today's
+// budget ($0.81 of $1.00). Replies keep working until you reach it."
+// ("your budget" for non-daily; percentage floored.)
+export const budgetWarnCopy = (b: GateBudget, pct: number): string =>
+  `You've used ${Math.floor(pct)}% of ${b.type === 'daily' ? "today's budget" : 'your budget'} (${usd(b.spend_nanos)} of ${usd(
+    b.budget_nanos,
+  )}). Replies keep working until you reach it.`
+
+// Composer banner and the column message at >= 100%: "Daily budget reached
+// ($1.00). Resets at … — ask an admin to raise it." Non-daily budgets say
+// "Budget reached" and only mention the reset time when there is one.
+export const budgetBlockCopy = (b: GateBudget): string => {
+  const head = b.type === 'daily' ? 'Daily budget reached' : 'Budget reached'
+  const tail = b.reset_at ? ` Resets at ${when(b.reset_at)} — ask an admin to raise it.` : ' Ask an admin to raise it.'
+  return `${head} (${usd(b.budget_nanos)}).${tail}`
+}
+
+// The Raw view's response pane for one column: a status + cost header line,
+// then the normalized body with the content trimmed to ~64 characters — or
+// a plain note while the column is streaming or has no reply yet.
+export const rawResponseBody = (r: Reply | null, streaming: boolean): string => {
+  if (streaming) return '// streaming…'
+  if (!r) return '// no response yet'
+  if (r.error) return `// error\n${r.error}`
+  const body: Record<string, unknown> = {}
+  if (r.id) body.id = r.id
+  body.model = r.model
+  body.choices = [
+    {
+      index: 0,
+      message: { role: 'assistant', content: r.text.length > 64 ? `${r.text.slice(0, 64)}…` : r.text },
+      finish_reason: r.finishReason ?? 'stop',
+    },
+  ]
+  if (r.tin != null && r.tout != null) {
+    body.usage = { prompt_tokens: r.tin, completion_tokens: r.tout, total_tokens: r.tin + r.tout }
+  }
+  return `// 200 · x-tollgate-cost-nanos: ${r.costNanos ?? '-'}\n${JSON.stringify(body, null, 2)}`
+}
 
 // >= 80% warns, >= 100% blocks; no budget (null or unlimited) is ok at 0.
 export const budgetState = (b: GateBudget | null): { pct: number; level: 'ok' | 'warn' | 'block' } => {

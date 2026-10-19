@@ -38,6 +38,39 @@ describe('apiStream', () => {
     })
   })
 
+  it('keeps the server message for a 5xx that carries a gateway error code', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'upstream exploded', type: 'api_error', code: 'upstream_error' } }), {
+          status: 502,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    await expect(apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, () => {}, signal())).rejects.toMatchObject({
+      status: 502,
+      message: 'upstream exploded',
+      code: 'upstream_error',
+    })
+  })
+
+  it('still labels a plain 5xx without a code as internal error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: { message: 'boom' } }), {
+          status: 500,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    await expect(apiStream('/console/api/v1/playground/chat/completions', { model: 'm' }, () => {}, signal())).rejects.toMatchObject({
+      status: 500,
+      message: 'internal error',
+    })
+  })
+
   it('feeds each SSE event as it completes and stops at [DONE]', async () => {
     vi.stubGlobal(
       'fetch',

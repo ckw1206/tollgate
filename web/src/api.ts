@@ -29,11 +29,21 @@ const parseBody = async (res: Response): Promise<unknown> => {
   }
 }
 
-// The ApiError for a non-2xx response, shared by api() and apiStream(): the
-// server's { error: { message, code } } body wins, with a stable label for 5xx.
+// The ApiError for a non-2xx response: the server's
+// { error: { message, code } } body wins, with a stable label for 5xx.
 const errorFor = (res: Response, body: unknown): ApiError => {
   const err = (body as { error?: { message?: string; code?: string } } | null)?.error
   const message = res.status >= 500 ? 'internal error' : err?.message ?? res.statusText
+  return new ApiError(res.status, message, err?.code)
+}
+
+// apiStream only: the playground shows the upstream status + message in the
+// failing column, so a 5xx that carries a gateway error code keeps the
+// server's message; a plain 5xx without a code still gets the stable label.
+const streamErrorFor = (res: Response, body: unknown): ApiError => {
+  const err = (body as { error?: { message?: string; code?: string } } | null)?.error
+  const message =
+    res.status >= 500 ? (err?.code ? err.message ?? 'internal error' : 'internal error') : err?.message ?? res.statusText
   return new ApiError(res.status, message, err?.code)
 }
 
@@ -94,7 +104,9 @@ const sseFeed = (events: string[], onEvent: (data: unknown) => void): boolean =>
 }
 
 // apiStream POSTs a JSON body and reads the response as it arrives: same 401
-// handling as api(); non-2xx throws ApiError with the server's message/code;
+// handling as api(); non-2xx throws ApiError with the server's message/code
+// (5xx with a gateway error code keep the server's message — see
+// streamErrorFor; api() always collapses 5xx to "internal error");
 // 2xx text/event-stream feeds each data: JSON to onEvent until [DONE]; 2xx
 // JSON calls onEvent once. Resolves with the status and headers (carrying
 // X-Tollgate-Cost on non-stream responses).
@@ -112,7 +124,7 @@ export async function apiStream(
     signal,
   })
   if (redirectIf401(res, path)) throw new ApiError(401, 'signed out')
-  if (!res.ok) throw errorFor(res, await parseBody(res))
+  if (!res.ok) throw streamErrorFor(res, await parseBody(res))
   const isSSE = (res.headers.get('content-type') ?? '').includes('text/event-stream')
   if (!isSSE) {
     const text = await res.text()

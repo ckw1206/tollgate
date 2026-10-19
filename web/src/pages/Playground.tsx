@@ -1,7 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, api, apiStream, toNanos, usd, when } from '../api'
+import { ApiError, api, apiStream, usd } from '../api'
+import { useAuth } from '../auth'
 import { Banner, Button, CheckButton, CopyButton, controlCls, ErrorText, inputCls, PageHeader, Segmented, Skeleton, useLoad } from '../components/ui'
-import { buildRequest, budgetState, costNanos, curlFor, replyMeta } from '../playground'
+import {
+  buildRequest,
+  budgetBlockCopy,
+  budgetState,
+  budgetWarnCopy,
+  columnErrorText,
+  curlFor,
+  rawResponseBody,
+  replyMeta,
+  usageReply,
+} from '../playground'
 import type { GateBudget, GateInfo, PlaygroundModel, Reply, SessionData, Turn } from '../types'
 
 // The playground runs through the console session (no API key): one POST per
@@ -30,14 +41,15 @@ interface SessionRow {
 // One SSE data payload (or the single non-stream JSON body): OpenAI-shaped,
 // normalised by the gateway for all three providers.
 interface Chunk {
-  choices?: { delta?: { content?: string }; message?: { content?: string } }[]
+  id?: string
+  choices?: { delta?: { content?: string }; message?: { content?: string }; finish_reason?: string }[]
   usage?: { prompt_tokens: number; completion_tokens: number; prompt_tokens_details?: { cached_tokens?: number } }
   error?: { message?: string; code?: string } // in-stream failure (sent after the stream started)
 }
 
 // A saved session may predate the current model set or an older page version:
-// accept the known shape, drop the rest, keep defaults.
-const DEFAULT_REPLY = { model: '', text: '', tin: 0, tout: 0, costNanos: 0, ms: 0, ttft: 0 }
+// accept the known shape, drop the rest, keep defaults (unknown usage = null).
+const DEFAULT_REPLY = { model: '', text: '', tin: null, tout: null, costNanos: null, ms: 0, ttft: 0 }
 const normalize = (d: Partial<SessionData> | null | undefined): SessionData => ({
   models: Array.isArray(d?.models) ? d.models.slice(0, MAX_MODELS).filter((m): m is string => typeof m === 'string') : [],
   system: typeof d?.system === 'string' ? d.system : '',
@@ -76,6 +88,7 @@ function MaxTokensInput({ value, onCommit }: { value: number; onCommit: (n: numb
 }
 
 export default function Playground() {
+  const { can } = useAuth()
   const models = useLoad<PlaygroundModel[]>('/console/api/v1/playground/models')
   const gate = useLoad<GateInfo>('/console/api/v1/gate')
   const list = useLoad<SessionMeta[]>(SESSIONS)
@@ -83,23 +96,29 @@ export default function Playground() {
   const [session, setSession] = useState<SessionData>(emptySession)
   const [name, setName] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  // The last saved (or loaded) snapshot; anything else is dirty.
+  // The last saved (or loaded) snapshot; anything else is dirty. A fresh,
+  // never-saved session is dirty only once there is something to save.
   const [saved, setSaved] = useState<{ name: string; data: SessionData } | null>(null)
-  const dirty = JSON.stringify({ name, data: session }) !== JSON.stringify(saved)
+  const dirty = saved
+    ? JSON.stringify({ name, data: session }) !== JSON.stringify(saved)
+    : name.trim() !== '' || session.turns.length > 0
 
   const [view, setView] = useState<'chat' | 'raw'>('chat')
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState(false)
-  const [live, setLive] = useState<Record<number, { text: string }>>({})
+  // In-flight text per slot, plus the exact request sent for that column.
+  const [live, setLive] = useState<Record<number, { text: string; request: object }>>({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [loadError, setLoadError] = useState('')
   const [bannerGone, setBannerGone] = useState<'warn' | 'block' | null>(null)
 
   // seq invalidates in-flight finishers (clear/new/switch bump it); pending
-  // counts the columns of the current send so the UI unlocks exactly once.
+  // counts the columns of the current send so the UI unlocks exactly once;
+  // pickSeq keeps a slower session GET from overwriting a newer pick.
   const seqRef = useRef(0)
   const pendingRef = useRef(0)
+  const pickSeqRef = useRef(0)
   const controllersRef = useRef(new Map<number, AbortController>())
 
   const abortAll = () => {
@@ -108,12 +127,13 @@ export default function Playground() {
   }
   useEffect(() => abortAll, [])
 
-  // First load: an empty session takes the first allowed model.
+  // Whenever the session has no models but some are usable, take the first
+  // (initial load, "New", a saved empty session).
   useEffect(() => {
     const m = models.data
-    if (!m?.length) return
+    if (!m?.length || session.models.length) return
     setSession((s) => (s.models.length ? s : { ...s, models: [m[0]!.name] }))
-  }, [models.data])
+  }, [models.data, session.models.length])
 
   const patch = (p: Partial<SessionData>) => setSession((s) => ({ ...s, ...p }))
   const setSlot = (i: number, model: string) =>
@@ -141,29 +161,27 @@ export default function Playground() {
 
   const budget: GateBudget | null = gate.data?.budget ?? null
   const { pct, level } = budgetState(budget)
-  const blockCopy = (b: GateBudget): string => {
-    const head = b.type === 'daily' ? 'Daily budget reached' : 'Budget reached'
-    const tail = b.reset_at ? ` Resets at ${when(b.reset_at)} — ask an admin to raise it.` : ' Ask an admin to raise it.'
-    return `${head} (${usd(b.budget_nanos)}).${tail}`
-  }
-  const budgetText = budget ? blockCopy(budget) : 'Daily budget reached.'
-  const warnCopy = (b: GateBudget): string =>
-    `You've used ${Math.round(pct)}% of ${b.type === 'daily' ? "today's budget" : 'your budget'} (${usd(b.spend_nanos)} of ${usd(
-      b.budget_nanos,
-    )}). Replies keep working until you reach it.`
+  const budgetText = budget ? budgetBlockCopy(budget) : 'Daily budget reached.'
 
-  const runColumn = async (seq: number, s: SessionData, slot: number, signal: AbortSignal) => {
+  const runColumn = async (seq: number, s: SessionData, slot: number, req: object, signal: AbortSignal) => {
     const model = s.models[slot]
     const info = models.data?.find((m) => m.name === model)
-    const req = buildRequest(s, slot)
     const t0 = performance.now()
     let ttft = 0
     let text = ''
     // Written from onEvent (a closure): an object keeps them readable after
     // the stream without fighting the narrowing on closure-assigned lets.
-    const st = { usage: null as NonNullable<Chunk['usage']> | null, err: null as { message: string; code?: string } | null }
+    const st = {
+      usage: null as NonNullable<Chunk['usage']> | null,
+      err: null as { message: string; code?: string } | null,
+      id: '',
+      finishReason: '',
+    }
     const onEvent = (d: unknown) => {
       const c = d as Chunk
+      if (c.id) st.id = c.id
+      const fr = c.choices?.[0]?.finish_reason
+      if (fr) st.finishReason = fr
       if (c.error) {
         st.err = { message: c.error.message ?? 'error', code: c.error.code }
         return
@@ -172,42 +190,22 @@ export default function Playground() {
       if (delta) {
         if (!ttft) ttft = performance.now() - t0 // TTFT = first content chunk
         text += delta
-        setLive((l) => ({ ...l, [slot]: { text } }))
+        setLive((l) => ({ ...l, [slot]: { text, request: req } }))
       }
       const msg = c.choices?.[0]?.message?.content
       if (typeof msg === 'string') {
         if (!ttft) ttft = performance.now() - t0
         text = msg
-        setLive((l) => ({ ...l, [slot]: { text } }))
+        setLive((l) => ({ ...l, [slot]: { text, request: req } }))
       }
       if (c.usage) st.usage = c.usage
     }
-    let tin = 0
-    let tout = 0
-    let cost = 0
     let fail: { message: string; code?: string; status?: number } | null = null
+    let costHeader: string | null = null
     try {
       const { headers } = await apiStream(CHAT, req, onEvent, signal)
-      if (st.err) {
-        fail = { message: st.err.message, code: st.err.code }
-      } else if (s.stream) {
-        // Streams carry no X-Tollgate-Cost: compute from the usage chunk with
-        // the same integer formula as the server.
-        if (st.usage && info) {
-          tin = st.usage.prompt_tokens
-          tout = st.usage.completion_tokens
-          cost = costNanos(
-            { prompt_tokens: st.usage.prompt_tokens, completion_tokens: st.usage.completion_tokens, cache_read: st.usage.prompt_tokens_details?.cached_tokens },
-            info,
-          )
-        }
-      } else {
-        cost = toNanos(headers.get('X-Tollgate-Cost') ?? '0')
-        if (st.usage) {
-          tin = st.usage.prompt_tokens
-          tout = st.usage.completion_tokens
-        }
-      }
+      costHeader = headers.get('X-Tollgate-Cost')
+      if (st.err) fail = { message: st.err.message, code: st.err.code }
     } catch (err) {
       if (err instanceof ApiError) fail = { message: err.message, code: err.code, status: err.status }
       else fail = { message: (err as Error).message }
@@ -223,10 +221,19 @@ export default function Playground() {
     }
     if (seq !== seqRef.current || signal.aborted) return // cleared/switched/unmounted: stale
     if (fail?.status === 401) return // signed out mid-run: the redirect owns the page
-    let error: string | undefined
-    if (fail && (fail.status === 402 || fail.code === 'budget_exceeded')) error = 'budget_exceeded'
-    else if (fail) error = fail.message
-    const reply: Reply = { model, text: fail ? '' : text, tin, tout, costNanos: fail ? 0 : cost, ms, ttft: Math.round(ttft), error }
+    const u = fail ? null : usageReply({ stream: s.stream, usage: st.usage, costHeader, model: info ?? null })
+    const reply: Reply = {
+      model,
+      text: fail ? '' : text,
+      tin: u?.tin ?? null,
+      tout: u?.tout ?? null,
+      costNanos: u?.costNanos ?? null,
+      ms,
+      ttft: Math.round(ttft),
+      error: fail ? columnErrorText(fail, budgetText) ?? undefined : undefined,
+      request: req,
+      ...(fail ? {} : { id: st.id || undefined, finishReason: st.finishReason || 'stop' }),
+    }
     setSession((cur) => {
       const turns = cur.turns
       const li = turns.length - 1
@@ -245,28 +252,34 @@ export default function Playground() {
     const turn: Turn = { user: text, replies: slots.map(() => null) }
     const next: SessionData = { ...session, turns: [...session.turns, turn] }
     const seq = ++seqRef.current
+    // The exact body each column will send, kept on the reply and shown in
+    // the Raw view (and used by Copy as cURL).
+    const reqs = slots.map((_, i) => buildRequest(next, i))
     setSession(next)
     setPrompt('')
     setRunning(true)
     // Every column is live from t=0 (empty text until the first chunk), so a
     // slow TTFT never flashes the "not run" note.
-    setLive(Object.fromEntries(slots.map((_, i) => [i, { text: '' }])))
+    setLive(Object.fromEntries(slots.map((_, i) => [i, { text: '', request: reqs[i]! }])))
     pendingRef.current = slots.length
     // One request per column, in parallel, each with its own AbortController.
     slots.forEach((_, i) => {
       const ctrl = new AbortController()
       controllersRef.current.set(i, ctrl)
-      void runColumn(seq, next, i, ctrl.signal)
+      void runColumn(seq, next, i, reqs[i]!, ctrl.signal)
     })
   }
 
   const pickSession = async (id: string) => {
     if (!id || id === sessionId) return
+    const n = ++pickSeqRef.current
     seqRef.current += 1
     abortAll()
     setLoadError('')
+    setSessionId(id) // the select shows the pick immediately, not after the GET
     try {
       const row = await api<SessionRow>(`${SESSIONS}/${id}`)
+      if (n !== pickSeqRef.current) return // a newer pick (or New) superseded this GET
       const data = normalize(row.data)
       setSession(data)
       setName(row.name)
@@ -275,14 +288,18 @@ export default function Playground() {
       setLive({})
       setBannerGone(null)
     } catch (e) {
-      setLoadError((e as Error).message)
+      if (n === pickSeqRef.current) setLoadError((e as Error).message)
     }
   }
 
   const newSession = () => {
+    pickSeqRef.current += 1
     seqRef.current += 1
     abortAll()
-    setSession(emptySession())
+    // Start on the first usable model when some are known; the preselect
+    // effect picks one up later if the list still hasn't loaded.
+    const first = models.data?.[0]?.name
+    setSession(first ? { ...emptySession(), models: [first] } : emptySession())
     setName('')
     setSessionId(null)
     setSaved(null)
@@ -322,25 +339,15 @@ export default function Playground() {
 
   const modelById = new Map((models.data ?? []).map((m) => [m.name, m]))
   const colTotal = (slot: number) => session.turns.reduce((sum, t) => sum + (t.replies[slot]?.costNanos ?? 0), 0)
-  const rawResponse = (slot: number): string => {
-    const lv = live[slot]
-    if (lv) return lv.text
-    const last = session.turns[session.turns.length - 1]
-    const r = last?.replies[slot] ?? null
-    if (!r) return '(no response yet)'
-    if (r.error === 'budget_exceeded') return budgetText
-    if (r.error) return r.error
-    return r.text || '(empty response)'
-  }
+  const usable = models.data ?? []
+  const usableNote = usable.length ? (can('models:write') ? `${usable.length} enabled models.` : `${usable.length} models you can use.`) : ''
   const canSend = prompt.trim() !== '' && session.models.length > 0 && !running && level !== 'block'
   const placeholder =
     level === 'block'
       ? budget?.type === 'daily'
         ? 'Daily budget reached'
         : 'Budget reached'
-      : session.models.length === 0
-        ? 'Add a model to send'
-        : `Message ${session.models.length === 1 ? session.models[0] : `${session.models.length} models`}… ⌘↵ to send`
+      : `Message ${session.models.length === 1 ? session.models[0] : `${session.models.length} models`}… ⌘↵ to send`
 
   const columnHeader = (slot: number) => (
     <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -357,12 +364,17 @@ export default function Playground() {
   const chatTurn = (slot: number, t: Turn, i: number) => {
     const r = t.replies[slot] ?? null
     const lv = live[slot]
+    // Live text belongs to the in-flight (last) turn only: a column added
+    // later must read "Not run" for the earlier turns, never the new reply.
+    const streaming = !r && lv !== undefined && i === session.turns.length - 1
     return (
       <div key={i}>
         <div className="mb-1.5 flex justify-end">
-          <span className="max-w-[90%] whitespace-pre-wrap break-words rounded-md bg-secondary px-2.5 py-1.5 text-[13px] text-secondary-foreground">{t.user}</span>
+          <span className="max-w-[90%] whitespace-pre-wrap break-words rounded-md bg-secondary px-2.5 py-1.5 text-[13px] text-secondary-foreground">
+            You {t.user}
+          </span>
         </div>
-        {!r && lv !== undefined ? (
+        {streaming ? (
           <div className="whitespace-pre-wrap break-words text-[13px]">
             {lv.text}
             <span aria-hidden className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-foreground align-[-2px]" />
@@ -370,7 +382,7 @@ export default function Playground() {
         ) : !r ? (
           <p className="text-[13px] text-muted-foreground">Not run — model added after this message.</p>
         ) : r.error ? (
-          <ErrorText>{r.error === 'budget_exceeded' ? budgetText : r.error}</ErrorText>
+          <ErrorText>{r.error}</ErrorText>
         ) : (
           <div>
             <div className="whitespace-pre-wrap break-words text-[13px]">{r.text || <span className="text-muted-foreground">(empty response)</span>}</div>
@@ -398,7 +410,13 @@ export default function Playground() {
               aria-label="Saved sessions"
               className={inputCls + ' bg-background'}
               value={sessionId ?? ''}
-              onChange={(e) => void pickSession(e.target.value)}
+              onChange={(e) => {
+                if (e.target.value === '') {
+                  if (sessionId !== null) newSession()
+                  return
+                }
+                void pickSession(e.target.value)
+              }}
               disabled={running}
             >
               <option value="">New session</option>
@@ -410,7 +428,9 @@ export default function Playground() {
             </select>
             <input className={inputCls} aria-label="Session name" placeholder="Untitled" maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
             <div className="mt-2 flex items-center gap-2">
-              <Button size="sm" onClick={() => void save()} disabled={saving || !dirty || !name.trim()}>
+              {/* Disabled while running: saving mid-run would persist the
+                  in-flight turn's null replies as "Not run". */}
+              <Button size="sm" onClick={() => void save()} disabled={saving || running || !dirty || !name.trim()}>
                 {dirty ? 'Save' : 'Saved'}
               </Button>
               <Button size="sm" variant="ghost" onClick={newSession} disabled={running}>
@@ -462,7 +482,7 @@ export default function Playground() {
                 + Compare another model
               </Button>
             )}
-            <p className="mt-1.5 text-xs text-muted-foreground">Up to 3 at a time.</p>
+            {usableNote && <p className="mt-1.5 text-xs text-muted-foreground">{usableNote}</p>}
           </section>
           <section className="border-t border-border pt-4">
             <h2 className={labelCls}>System prompt</h2>
@@ -530,13 +550,15 @@ export default function Playground() {
           </div>
           <div className="min-h-[280px] flex-1 p-4">
             {view === 'chat' && session.turns.length === 0 ? (
-              models.data === null ? (
+              models.data === null || session.models.length === 0 ? (
+                // Models still loading, or "New" waiting for the preselect
+                // effect: a skeleton, never "no models available".
                 <div className="flex flex-col gap-3 py-12">
                   {[0, 1, 2].map((i) => (
                     <Skeleton key={i} className="h-4 w-2/3 self-center" />
                   ))}
                 </div>
-              ) : session.models.length === 0 ? (
+              ) : usable.length === 0 ? (
                 <p className="py-12 text-center text-sm text-muted-foreground">No models available — ask an admin to enable one.</p>
               ) : (
                 <div className="flex flex-col items-center gap-1 py-12 text-center">
@@ -555,19 +577,25 @@ export default function Playground() {
                       <div className="flex flex-col gap-4 p-3">{session.turns.map((t, i) => chatTurn(slot, t, i))}</div>
                     ) : (
                       (() => {
-                        const req = buildRequest(session, slot)
+                        const last = session.turns[session.turns.length - 1]
+                        const r = last?.replies[slot] ?? null
+                        const lv = live[slot]
+                        const inflight = !!last && !r && lv !== undefined
+                        // The exact body that was sent (or the one that would
+                        // go out for a new turn); Copy as cURL uses it in full.
+                        const req: object = inflight ? lv.request : (r?.request ?? buildRequest(session, slot))
                         return (
                           <div className="flex flex-col gap-4 p-3">
                             <div>
                               <h3 className={labelCls}>Request</h3>
                               <pre className="mt-1.5 overflow-x-auto rounded-md bg-muted p-2.5 font-mono text-[11px] leading-relaxed">
-                                {JSON.stringify(req, null, 2)}
+                                {`// POST /playground/chat/completions\n${JSON.stringify(req, null, 2)}`}
                               </pre>
                             </div>
                             <div>
                               <h3 className={labelCls}>Response</h3>
                               <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-2.5 font-mono text-[11px] leading-relaxed">
-                                {rawResponse(slot)}
+                                {rawResponseBody(r, inflight)}
                               </pre>
                             </div>
                             <div className="flex justify-end">
@@ -585,7 +613,7 @@ export default function Playground() {
           <div className="border-t border-border p-4">
             {level !== 'ok' && budget && bannerGone !== level && (
               <div className="mb-2">
-                <Banner onDismiss={() => setBannerGone(level)}>{level === 'warn' ? warnCopy(budget) : blockCopy(budget)}</Banner>
+                <Banner onDismiss={() => setBannerGone(level)}>{level === 'warn' ? budgetWarnCopy(budget, pct) : budgetBlockCopy(budget)}</Banner>
               </div>
             )}
             <div className="flex items-end gap-2">
