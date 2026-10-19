@@ -171,34 +171,36 @@ export interface Me {
   server: ServerInfo
 }
 
-// Playground (session-scoped, no API key). GET /playground/models: the enabled
-// models the caller may try, with prices for client-side cost (micro-USD per
-// 1M tokens; spend is nano-USD).
+// Playground (session-scoped, no API key). The enabled models the caller may
+// try, with prices for client-side cost (micro-USD per 1M tokens; spend is
+// nano-USD).
 export interface PlaygroundModel {
-  id: string
   name: string
   provider: Model['provider']
-  price_input_micros: number
-  price_output_micros: number
-  price_cache_read_micros: number | null
-  price_cache_write_micros: number | null
+  input_micros: number
+  output_micros: number
+  cache_read_micros: number | null
+  cache_write_micros: number | null
 }
 
 // The caller's tightest budget = their group's limits.
 export interface GateBudget {
-  budget_type: BudgetType
+  type: BudgetType
   budget_nanos: number
   spend_nanos: number
-  budget_reset_at: string | null
+  reset_at: string | null
 }
 
-// Gate bar, polled every 15 s. providers_total = distinct providers of the
-// enabled models; providers_down = those whose last >= 3 requests in the past
-// 5 minutes all came back >= 500.
+// GET /console/api/v1/gate, polled every 15 s. providers_up of
+// providers_total: distinct providers of the enabled models; a provider is
+// down when its last >= 3 requests in the past 5 minutes all came back >= 500.
+// rpm is the caller's group rate limit; p50_ms the recent latency.
 export interface GateInfo {
-  budget: GateBudget | null
+  providers_up: number
   providers_total: number
-  providers_down: number
+  rpm: number | null
+  p50_ms: number | null
+  budget: GateBudget | null
 }
 
 // One column of one playground turn. replies[i] lines up with models[i];
