@@ -10,7 +10,7 @@
       try {
         if (localStorage.getItem('tollgate.theme') === 'light') document.documentElement.dataset.mode = 'light'
       } catch (e) {}
-      // The landing and auth pages (/welcome, /login, /setup, /invite) are always light: paint their base colour until they mount.
+      // The landing and auth pages (/welcome, /login, /setup, /invite) are always dark: paint their base colour until they mount.
       if (/^\/(welcome|login|setup|invite\/)/.test(location.pathname)) document.documentElement.classList.add('landing-boot')
     </script>
   </head>

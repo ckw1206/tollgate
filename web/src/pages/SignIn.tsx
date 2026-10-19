@@ -129,7 +129,7 @@ function SetupCard({ info, initialToken, onDone, onAlreadySetUp }: {
   return (
     <form onSubmit={submit} className="flex flex-col gap-3.5">
       <div className="flex flex-col gap-1.5">
-        <span className="self-start bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">First run</span>
+        <span className="inline-flex self-start bg-warning px-2 py-0.5 text-xs font-medium text-warning-foreground">First run</span>
         <h1 className="text-xl font-semibold">Set up {name}</h1>
         <span className="text-[13px] text-muted-foreground">No accounts exist yet. Create the first admin — you'll invite everyone else from the console.</span>
       </div>
