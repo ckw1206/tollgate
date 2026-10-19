@@ -6,7 +6,7 @@ import type { GateBudget, GateInfo, PlaygroundModel, Reply, SessionData, Turn } 
 
 // The playground runs through the console session (no API key): one POST per
 // column, key-less principal, the user's group as billing scope.
-const CHAT = '/console/api/v1/playground/chat'
+const CHAT = '/console/api/v1/playground/chat/completions'
 const SESSIONS = '/console/api/v1/playground/sessions'
 const MAX_MODELS = 3
 
