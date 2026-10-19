@@ -3,12 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/png" href="/tollgate.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" href="/tollgate-180.png" />
     <title>Tollgate</title>
     <script>
-      // Apply the saved theme before first paint so there's no flash.
+      // Apply the stored theme before first paint so there's no flash. Inlined
+      // copy of resolveMode in src/theme.ts (this runs before the bundle loads).
       try {
-        if (localStorage.getItem('tollgate.theme') === 'light') document.documentElement.dataset.mode = 'light'
+        var t = localStorage.getItem('tollgate.theme')
+        document.documentElement.dataset.mode = t === 'light' || t === 'dark' ? t : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
       } catch (e) {}
       // The landing and auth pages (/welcome, /login, /setup, /invite) are always dark: paint their base colour until they mount.
       if (/^\/(welcome|login|setup|invite\/)/.test(location.pathname)) document.documentElement.classList.add('landing-boot')

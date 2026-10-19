@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from './auth'
+import GateBar from './components/GateBar'
 import { Segmented, type Tab } from './components/ui'
+import { resolveMode, storedPref, THEME_KEY, type ThemePref } from './theme'
 import type { ServerInfo } from './types'
 
 // One layout for every role; nav items are filtered by permission. Order is fixed.
@@ -35,16 +37,32 @@ export function BrandIcon({ icon, size = 28, alt = '' }: { icon: string; size?: 
   return <img src={src} alt={alt} width={size} height={size} className="shrink-0 object-contain" style={{ width: size, height: size }} />
 }
 
-type Mode = 'dark' | 'light'
-
-function useTheme(): [Mode, (m: Mode) => void] {
-  const [mode, setMode] = useState<Mode>(document.documentElement.dataset.mode === 'light' ? 'light' : 'dark')
-  const set = (m: Mode) => {
-    document.documentElement.dataset.mode = m
+// Theme: System follows the OS live (a matchMedia change updates data-mode
+// while the console is open); Dark/Light are explicit picks stored in
+// localStorage, and System removes the key. The hook runs only under the
+// console layout — the landing and auth shells own their always-dark pages,
+// so this never touches data-mode there.
+function useTheme(): [ThemePref, (m: ThemePref) => void] {
+  const [mode, setMode] = useState<ThemePref>(storedPref)
+  useEffect(() => {
+    if (mode !== 'system') {
+      document.documentElement.dataset.mode = mode
+      return
+    }
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => {
+      document.documentElement.dataset.mode = resolveMode(null, mq.matches)
+    }
+    apply()
+    mq.addEventListener('change', apply)
+    return () => mq.removeEventListener('change', apply)
+  }, [mode])
+  const set = (m: ThemePref) => {
     try {
-      localStorage.setItem('tollgate.theme', m)
+      if (m === 'system') localStorage.removeItem(THEME_KEY)
+      else localStorage.setItem(THEME_KEY, m)
     } catch {
-      // storage blocked: the toggle still works for this page view
+      // storage blocked: the choice still applies for this page view
     }
     setMode(m)
   }
@@ -75,7 +93,7 @@ function Identity({ onSignOut, onNavigate }: { onSignOut: () => void; onNavigate
       <button className="mt-1.5 self-start underline hover:text-foreground" onClick={onSignOut}>Sign out</button>
       <div className="mt-2.5 flex items-center justify-between gap-2">
         <span>Theme</span>
-        <Segmented small label="Theme" value={mode} onChange={setMode} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
+        <Segmented small label="Theme" value={mode} onChange={setMode} options={[{ value: 'system', label: 'System' }, { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }]} />
       </div>
       <NavLink
         to="/docs"
@@ -160,6 +178,7 @@ export default function Layout() {
         </div>
       </aside>
       <main className="min-w-0 flex-1 p-4 md:p-8">
+        <GateBar />
         <Outlet />
       </main>
     </div>

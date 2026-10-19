@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { dash, fmtTokens, short, usd, when } from '../api'
 import { useAuth } from '../auth'
 import GetStarted from '../components/GetStarted'
-import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Table, useLoad } from '../components/ui'
+import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Sparkline, Table, useLoad } from '../components/ui'
 import { fmtBucket, isDay, PER_UNIT, PER_WORD, RANGES, spanOf } from '../range'
 import type { Granularity, Range } from '../range'
 import type { ApiKey, Group, SpendLog, SpendRow, User } from '../types'
@@ -17,6 +17,8 @@ const METRICS: { value: Metric; label: string }[] = [{ value: 'tokens', label: '
 const SHOW = [10, 25, 50, 100]
 const SHOW_KEY = 'tollgate.recent'
 const tooltipStyle = { background: 'var(--background)', border: '1px solid var(--border)', color: 'var(--foreground)' }
+
+const ZERO_ROW: SpendRow = { bucket: '', requests: 0, input_tokens: 0, output_tokens: 0, cost_nanos: 0 }
 
 const metricOf = (r: SpendRow, m: Metric) => (m === 'cost' ? r.cost_nanos : m === 'requests' ? r.requests : r.input_tokens + r.output_tokens)
 const showMetric = (v: number, m: Metric) => (m === 'cost' ? usd(v) : m === 'tokens' ? fmtTokens(v) : fmt.format(v))
@@ -56,10 +58,15 @@ function DayInput({ label, value, min, max, onCommit }: { label: string; value: 
   )
 }
 
-function Stat({ label, value, title }: { label: string; value: string | null; title?: string }) {
+// Stat: D2 signage label, the range value, and an optional 30-day sparkline
+// (primary tone for spend, muted for requests/tokens).
+function Stat({ label, value, spark, tone, title }: { label: string; value: string | null; spark?: number[] | null; tone?: 'primary' | 'muted'; title?: string }) {
   return (
     <div className="rounded-lg border border-border bg-card p-4">
-      <div className="text-xs uppercase tracking-[0.04em] text-muted-foreground">{label}</div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground">{label}</div>
+        {spark && spark.length > 1 && <Sparkline points={spark} tone={tone ?? 'muted'} />}
+      </div>
       <div className="mt-1 text-2xl font-semibold tabular-nums" title={title}>{value ?? <Skeleton className="mt-2 h-6 w-24" />}</div>
     </div>
   )
@@ -69,7 +76,7 @@ function Panel({ title, actions, children }: { title: string; actions?: React.Re
   return (
     <section className="min-w-0 rounded-lg border border-border bg-card p-4">
       <div className={`${actions ? 'mb-3' : 'mb-2'} flex flex-wrap items-center justify-between gap-3`}>
-        <h2 className="text-sm font-medium text-muted-foreground">{title}</h2>
+        <h2 className="font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground">{title}</h2>
         {actions}
       </div>
       {children}
@@ -289,6 +296,10 @@ export default function Dashboard() {
   const daily = useLoad<Spend>(`/console/api/v1/spend?group_by=${span.groupBy}&${span.q}`)
   const byModel = useLoad<Spend>(`/console/api/v1/spend?group_by=model&${span.q}`)
   const recent = useLoad<SpendLog[]>(`/console/api/v1/spend/requests?${span.q}&limit=${show}`)
+  // Stat-card sparklines: always the last 30 days by day, whatever range the
+  // panels use — one /spend?group_by=day fetch feeds all three series.
+  const spark30 = useMemo(() => spanOf('30d', null, null, tz), [tz])
+  const spark = useLoad<Spend>(`/console/api/v1/spend?group_by=day&${spark30.q}`)
 
   // Admin-only: the Top users / Top groups boards and the Top models scope toggle. The users
   // list serves both the boards' name resolution and the toggle's dropdown (contract C5/C6).
@@ -307,6 +318,9 @@ export default function Dashboard() {
   const tokens = sum((r) => r.input_tokens + r.output_tokens)
   const byBucket = new Map((rows ?? []).map((r) => [r.bucket, r.cost_nanos]))
   const chart = span.buckets.map((b) => ({ bucket: b, usd: (byBucket.get(b) ?? 0) / 1e9 }))
+  // Sparkline series, zero-filled for days without spend.
+  const sparkByBucket = new Map((spark.data?.rows ?? []).map((r) => [r.bucket, r]))
+  const sparkPoints = (f: (r: SpendRow) => number) => (spark.data ? spark30.buckets.map((b) => f(sparkByBucket.get(b) ?? ZERO_ROW)) : null)
 
   // Empty dashboard without the checklist (members and viewers): a next step, never a dead end.
   // "Yet" copy only when nothing has ever been recorded; a quiet range says "in this period".
@@ -352,9 +366,9 @@ export default function Dashboard() {
         <ErrorText>{daily.error || byModel.error || recent.error || (admin ? byUser.error || byGroup.error : '')}</ErrorText>
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="Spend" value={spend == null ? null : usd(spend)} />
-        <Stat label="Requests" value={requests == null ? null : fmt.format(requests)} />
-        <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
+        <Stat label="Spend" value={spend == null ? null : usd(spend)} spark={sparkPoints((r) => r.cost_nanos)} tone="primary" />
+        <Stat label="Requests" value={requests == null ? null : fmt.format(requests)} spark={sparkPoints((r) => r.requests)} />
+        <Stat label="Tokens" value={tokens == null ? null : fmtTokens(tokens)} spark={sparkPoints((r) => r.input_tokens + r.output_tokens)} title={tokens == null ? undefined : fmt.format(tokens)} />
       </div>
       <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title={`Spend per ${span.granularity} (USD)`}>
@@ -365,14 +379,14 @@ export default function Dashboard() {
               <p className="flex h-full items-center justify-center text-sm text-muted-foreground">{neverUsed ? 'No requests yet.' : 'No requests in this period.'}</p>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+                <AreaChart data={chart} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                   <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
                   <XAxis dataKey="bucket" tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" tickFormatter={(b) => fmtBucket(String(b), span.granularity)} minTickGap={24} />
                   <YAxis tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" width={56} />
                   <Tooltip formatter={(v: number) => usd(Math.round(v * 1e9))} labelFormatter={(b) => fmtBucket(String(b), span.granularity)} contentStyle={tooltipStyle} />
                   {/* A single-bucket range (e.g. a one-day custom) is one point: give it a dot. */}
-                  <Line type="monotone" dataKey="usd" stroke="var(--primary)" strokeWidth={2} dot={chart.length === 1 ? { r: 3, fill: 'var(--primary)' } : false} />
-                </LineChart>
+                  <Area type="monotone" dataKey="usd" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.14} strokeWidth={2} dot={chart.length === 1 ? { r: 3, fill: 'var(--primary)' } : false} />
+                </AreaChart>
               </ResponsiveContainer>
             )}
           </div>
@@ -386,8 +400,8 @@ export default function Dashboard() {
         </div>
       )}
       <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-medium text-muted-foreground">
-          Recent requests <span className="font-normal">· {span.label}</span>
+        <h2 className="font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+          Recent requests <span>· {span.label}</span>
         </h2>
         <label className="flex items-center gap-2 text-[13px] text-muted-foreground">
           Show
