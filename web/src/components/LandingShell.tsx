@@ -6,7 +6,8 @@ import { mount, type GridOpts } from '../lib/tollgateGrid'
 import type { LandingInfo } from '../types'
 
 // LandingShell is the /welcome page (toll-lane grid, hero, no form); AuthShell is the page
-// around the sign-in, setup and invite cards. Both are always dark.
+// around the sign-in, setup and invite cards. Both are always dark. Layout per the
+// "Tollgate Landing" / "Tollgate Sign In" design mocks (.sdd/ref/).
 
 export const DEFAULT_HEADLINE = 'One gateway for every model your team uses'
 export const DEFAULT_TAGLINE = 'Keys, budgets and rate limits in front of OpenAI, Anthropic and Google — self-hosted, and it speaks the OpenAI API.'
@@ -23,9 +24,9 @@ export function useLanding(fresh = false) {
   return info
 }
 
-// The toll-lane grid: a fixed, non-interactive canvas painted under the relative content
-// blocks (position: fixed sits in the positioned paint layer, so content must be positioned
-// to cover it). Module-level opts keep the mount effect stable across renders.
+// The toll-lane grid: a non-interactive canvas sized to the shell, painted under the
+// relative content blocks (positioned, so they cover it in paint order). Module-level opts
+// keep the mount effect stable across renders.
 function GridCanvas({ opts }: { opts: Partial<GridOpts> }) {
   const ref = useRef<HTMLCanvasElement>(null)
   useEffect(() => {
@@ -39,48 +40,70 @@ function GridCanvas({ opts }: { opts: Partial<GridOpts> }) {
 const LANDING_GRID: Partial<GridOpts> = { horizon: 0.52 }
 const AUTH_GRID: Partial<GridOpts> = { intensity: 0.7, traffic: false, flow: 0.5 }
 
-// /health answers 200 while postgres and redis are up, 503 when either is down.
-function Status({ up }: { up: boolean | null }) {
-  const dot = up === null ? 'bg-muted-foreground' : up ? 'bg-success-foreground' : 'bg-destructive'
-  const state = up === null ? 'checking' : up ? 'Operational' : 'Down'
+// Corner-bracket decoration from the mock: two L-shaped corners (top-left, bottom-right)
+// built from token-coloured borders on absolutely positioned spans, around a padded box.
+function Brackets({ size, color, children }: { size: 12 | 14; color: string; children: ReactNode }) {
+  const w = size === 12 ? 'h-3 w-3' : 'h-3.5 w-3.5'
+  const pad = size === 12 ? 'p-[5px]' : 'p-1.5'
   return (
-    <a href="/health" aria-label={`Status: ${state}`} title={`Status: ${state}`} className="flex items-center gap-1.5 hover:text-foreground">
-      <span aria-hidden className={`h-1.5 w-1.5 ${dot}`} />
-      Status {state}
+    <span className={`relative inline-flex ${pad}`}>
+      <span aria-hidden className={`absolute left-0 top-0 ${w} border-l border-t ${color}`} />
+      <span aria-hidden className={`absolute bottom-0 right-0 ${w} border-b border-r ${color}`} />
+      {children}
+    </span>
+  )
+}
+
+// /health answers 200 while postgres and redis are up, 503 when either is down. Nothing
+// renders until it answers, so "checking" never flashes.
+function Status({ up, className = '' }: { up: boolean | null; className?: string }) {
+  if (up === null) return null
+  const state = up ? 'Operational' : 'Down'
+  return (
+    <a href="/health" aria-label={`Status: ${state}`} title={`Status: ${state}`} className={`items-center gap-2 hover:text-primary ${className}`}>
+      Status
+      <span className="flex items-center gap-1.5 text-foreground">
+        <span aria-hidden className={`h-1.5 w-1.5 ${up ? 'bg-primary' : 'bg-destructive'}`} />
+        {state}
+      </span>
     </a>
   )
 }
 
+// Footer: "Version {v}". The build version already carries the "v" prefix; a tagged build
+// links to its release.
 function VersionTag({ info }: { info: LandingInfo | null }) {
   const v = info?.version || 'dev'
   const tagged = !!info?.version && info.version !== 'dev'
   return (
-    <span>
+    <span className="flex gap-2">
       Version{' '}
       {tagged ? (
-        <a className="hover:text-foreground" href={`${REPO}/releases/tag/${v}`} target="_blank" rel="noreferrer">
+        <a className="text-foreground hover:text-primary" href={`${REPO}/releases/tag/${v}`}>
           {v}
         </a>
       ) : (
-        v
+        <span className="text-foreground">{v}</span>
       )}
     </span>
   )
 }
 
-// The header CTA is bracketed: "[ Set up ]".
-function BracketCta({ label }: { label: string }) {
+// The centred release-tag link above the wordmark, with the --primary square marker.
+function ReleaseTag({ info }: { info: LandingInfo | null }) {
+  const v = info?.version || 'dev'
+  const tagged = !!info?.version && info.version !== 'dev'
   return (
-    <>
-      <span aria-hidden className="text-muted-foreground">[</span>
-      {label}
-      <span aria-hidden className="text-muted-foreground">]</span>
-    </>
+    <a className="inline-flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[0.14em] text-muted-foreground hover:text-primary" href={tagged ? `${REPO}/releases/tag/${v}` : REPO}>
+      <span aria-hidden className="h-1.5 w-1.5 bg-primary" />
+      Self-hosted · OpenAI-compatible
+    </a>
   )
 }
 
-const heroPrimaryCls = 'inline-flex h-12 items-center rounded-md bg-foreground px-7 font-mono text-[13px] font-medium uppercase tracking-[0.1em] text-background hover:opacity-[.88]'
-const heroGhostCls = 'inline-flex h-12 items-center rounded-md border border-border px-7 font-mono text-[13px] font-medium uppercase tracking-[0.1em] text-foreground hover:text-muted-foreground'
+const headerCtaCls = 'inline-flex h-[38px] items-center bg-foreground px-5 font-medium text-background hover:bg-primary hover:text-primary-foreground'
+const heroPrimaryCls = 'inline-flex h-[46px] items-center gap-3 bg-primary px-[26px] font-medium text-primary-foreground hover:bg-foreground hover:text-background'
+const heroGhostCls = 'inline-flex h-[46px] items-center border border-border bg-background px-[26px] font-medium text-foreground hover:border-foreground'
 
 export function LandingShell({ info, cta, preview = false }: {
   info: LandingInfo | null
@@ -90,7 +113,7 @@ export function LandingShell({ info, cta, preview = false }: {
   const name = info?.server_name || 'Tollgate'
   const headline = info?.landing_headline || DEFAULT_HEADLINE
   const tagline = info?.landing_tagline || DEFAULT_TAGLINE
-  // One /health probe drives the footer status (none in preview).
+  // One /health probe drives the status (footer, or the centred row below 640px); none in preview.
   const [up, setUp] = useState<boolean | null>(null)
   useEffect(() => {
     if (!preview) api('/health').then(() => setUp(true), () => setUp(false))
@@ -98,71 +121,86 @@ export function LandingShell({ info, cta, preview = false }: {
   useUnboot()
 
   // No CTA until it's known, so "Sign in" never flashes before "Set up" (Landing gates it).
-  const headerCta = cta && (preview
-    ? <a href={cta.to} className="whitespace-nowrap hover:text-muted-foreground"><BracketCta label={cta.label} /></a>
-    : <Link to={cta.to} className="whitespace-nowrap hover:text-muted-foreground"><BracketCta label={cta.label} /></Link>)
-  const heroCta = cta && (preview
-    ? <a href={cta.to} className={heroPrimaryCls}>{cta.label} <span aria-hidden>→</span></a>
-    : <Link to={cta.to} className={heroPrimaryCls}>{cta.label} <span aria-hidden>→</span></Link>)
-  const docs = preview
-    ? <a href="/docs" className={heroGhostCls}>Read the docs</a>
-    : <Link to="/docs" className={heroGhostCls}>Read the docs</Link>
+  const headerCta = cta && (
+    <Brackets size={12} color="border-foreground">
+      {preview
+        ? <a href={cta.to} className={headerCtaCls}>{cta.label}</a>
+        : <Link to={cta.to} className={headerCtaCls}>{cta.label}</Link>}
+    </Brackets>
+  )
+  const heroCta = cta && (
+    <Brackets size={14} color="border-primary">
+      {preview
+        ? <a href={cta.to} className={heroPrimaryCls}>{cta.label}<span aria-hidden>→</span></a>
+        : <Link to={cta.to} className={heroPrimaryCls}>{cta.label}<span aria-hidden>→</span></Link>}
+    </Brackets>
+  )
+  const docs = (
+    <Brackets size={14} color="border-foreground">
+      {preview
+        ? <a href="/docs" className={heroGhostCls}>Read the docs</a>
+        : <Link to="/docs" className={heroGhostCls}>Read the docs</Link>}
+    </Brackets>
+  )
   const docsLink = preview
-    ? <a href="/docs" className="hover:text-muted-foreground">Docs</a>
-    : <Link to="/docs" className="hover:text-muted-foreground">Docs</Link>
+    ? <a href="/docs" className="hover:text-primary">Docs</a>
+    : <Link to="/docs" className="hover:text-primary">Docs</Link>
+  const github = <a href={REPO} className="hover:text-primary">GitHub</a>
 
   return (
     <div data-mode="dark" data-theme="mira" className="relative flex min-h-screen flex-col overflow-hidden bg-background text-sm leading-normal text-foreground">
       <GridCanvas opts={LANDING_GRID} />
       {preview && (
         // Plain links: the preview tab never fetched the session, so these are full page loads.
-        <div role="status" className="relative flex h-8 items-center justify-center gap-3 bg-warning px-4 text-[13px] text-warning-foreground">
+        <div role="status" className="relative flex h-8 shrink-0 items-center justify-center gap-3 bg-warning px-4 text-[13px] text-warning-foreground">
           Preview — this is what signed-out visitors see.
           <a href="/settings" className="underline underline-offset-2">Back to Settings</a>
         </div>
       )}
-      <header className="relative flex h-[88px] items-center justify-between gap-4 px-[clamp(20px,4vw,56px)]">
+      <header className="relative flex h-[88px] shrink-0 items-center justify-between gap-4 px-[clamp(20px,4vw,48px)]">
         <div className="flex min-w-0 items-center gap-2.5">
           <BrandIcon icon={info?.server_icon ?? ''} size={30} />
-          <span className="truncate text-[22px] font-medium tracking-[-0.02em]">{name}</span>
+          <span className="truncate text-[20px] font-semibold tracking-[-0.02em]">{name}</span>
         </div>
-        <nav className="flex shrink-0 items-center gap-[clamp(16px,2.5vw,36px)] font-mono text-[13px] uppercase tracking-[0.08em]">
-          <span className="hidden items-center gap-[clamp(16px,2.5vw,36px)] sm:flex">
+        <nav className="flex shrink-0 items-center gap-[clamp(16px,3vw,36px)] font-mono text-[12px] uppercase tracking-[0.1em]">
+          <span className="hidden items-center gap-[clamp(16px,3vw,36px)] sm:flex">
             {docsLink}
-            <a href={REPO} className="hover:text-muted-foreground">GitHub</a>
+            {github}
           </span>
           {headerCta}
         </nav>
       </header>
 
-      <main className="relative flex flex-1 flex-col px-[clamp(20px,4vw,56px)] py-8 sm:py-10">
-        <div className="max-w-[480px]">
-          <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">Self-hosted · OpenAI-compatible</p>
-          <p className="mt-3 text-[15px] leading-normal text-foreground/72">{tagline}</p>
+      <div className="relative shrink-0 pl-[clamp(20px,10vw,160px)] pr-[clamp(20px,4vw,48px)] pt-[clamp(16px,6vh,72px)]">
+        <p className="max-w-[300px] font-mono text-[13px] uppercase leading-[1.55] tracking-[0.04em] text-pretty">{tagline}</p>
+      </div>
+
+      <main className="relative flex flex-1 flex-col items-center justify-center gap-7 px-5 py-10 text-center">
+        <ReleaseTag info={info} />
+        <h1 className="text-[clamp(56px,11vw,152px)] font-semibold uppercase leading-[0.9] tracking-[-0.055em]">{name}</h1>
+        <p className="max-w-[760px] font-mono text-[clamp(12px,1.2vw,15px)] uppercase tracking-[0.32em] text-balance">{headline}</p>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-5 font-mono text-[13px] uppercase tracking-[0.1em]">
+          {heroCta}
+          {docs}
         </div>
-        <div className="my-auto flex flex-col items-center gap-6 pt-10 text-center sm:gap-7">
-          <h1 className="text-[clamp(44px,8vw,92px)] font-medium uppercase leading-none tracking-[-0.02em]">{name}</h1>
-          <p className="max-w-[760px] font-mono text-[clamp(11px,1.15vw,14px)] leading-loose tracking-[0.32em] text-foreground/72">{headline}</p>
-          <div className="mt-1 flex flex-col items-center gap-3 sm:flex-row">
-            {heroCta}
-            {docs}
-          </div>
-          <div className="flex items-center gap-[28px] font-mono text-[13px] uppercase tracking-[0.08em] sm:hidden">
-            {docsLink}
-            <a href={REPO} className="hover:text-muted-foreground">GitHub</a>
-          </div>
-        </div>
-        <div className="sm:self-end sm:text-right">
-          <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground">Routes to</p>
-          <div className="mt-2.5 flex flex-wrap gap-x-[clamp(20px,3vw,48px)] gap-y-2 text-[15px] font-medium tracking-[-0.01em]">
-            {ROUTES.map((r) => <span key={r}>{r}</span>)}
-          </div>
+        {/* Below 640px: Docs, GitHub and Status move here, centred under the hero. */}
+        <div className="flex items-center justify-center gap-[clamp(16px,3vw,36px)] font-mono text-[13px] uppercase tracking-[0.1em] sm:hidden">
+          {docsLink}
+          {github}
+          <Status up={up} className="flex" />
         </div>
       </main>
 
-      <footer className="relative flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border px-[clamp(20px,4vw,56px)] py-4 font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
+      <div className="relative flex shrink-0 items-end justify-end pl-[clamp(20px,4vw,48px)] pr-[clamp(20px,10vw,160px)] pb-[clamp(16px,5vh,56px)]">
+        <div className="flex flex-col items-end gap-1.5 text-right font-mono text-[13px] uppercase tracking-[0.04em]">
+          <span className="text-[11px] tracking-[0.14em] text-muted-foreground">Routes to</span>
+          {ROUTES.map((r) => <span key={r}>{r}</span>)}
+        </div>
+      </div>
+
+      <footer className="relative flex shrink-0 flex-wrap items-center justify-between gap-4 px-[clamp(20px,4vw,48px)] pb-6 font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
         <VersionTag info={info} />
-        <Status up={up} />
+        <Status up={up} className="hidden sm:flex" />
       </footer>
     </div>
   )
@@ -174,24 +212,23 @@ export function LandingShell({ info, cta, preview = false }: {
 export function AuthShell({ info, children }: { info: LandingInfo | null; children?: ReactNode }) {
   useUnboot()
   return (
-    <div data-mode="dark" data-theme="mira" className="relative flex min-h-screen flex-col bg-background text-sm leading-normal text-foreground">
+    <div data-mode="dark" data-theme="mira" className="relative flex min-h-screen flex-col overflow-hidden bg-background text-sm leading-normal text-foreground">
       <GridCanvas opts={AUTH_GRID} />
-      <header className="relative flex h-[72px] items-center justify-between gap-4 px-[clamp(20px,4vw,40px)]">
-        <Link to="/welcome" className="flex min-w-0 items-center gap-2.5 hover:text-muted-foreground">
+      <header className="relative flex h-[72px] shrink-0 items-center justify-between gap-4 px-[clamp(20px,4vw,40px)]">
+        <Link to="/welcome" className="flex min-w-0 items-center gap-2.5 hover:text-primary">
           <BrandIcon icon={info?.server_icon ?? ''} size={28} />
           <span className="truncate text-xl font-medium tracking-[-0.02em]">{info?.server_name || 'Tollgate'}</span>
         </Link>
-        <Link to="/docs" className="font-mono text-xs uppercase tracking-[0.08em] hover:text-muted-foreground">Docs</Link>
+        <Link to="/docs" className="font-mono text-xs uppercase tracking-[0.08em] hover:text-primary">Docs</Link>
       </header>
       <main className="relative flex flex-1 items-start justify-center px-5 pb-16 pt-[clamp(24px,10vh,120px)]">
-        {children && <div className="flex w-full max-w-[400px] flex-col gap-4 border border-border bg-background p-7 shadow-landing-card">{children}</div>}
+        {children && <div className="flex w-full max-w-[400px] flex-col gap-4 border border-border bg-card p-7 shadow-landing-card">{children}</div>}
       </main>
     </div>
   )
 }
 
-// Auth form controls: 40px transparent inputs, 44px foreground-filled submit
-// (dark Mira's --primary is the lane yellow, reserved for the grid and links).
+// Auth form controls: 40px transparent inputs, 44px --primary-filled submit (per the mock).
 export const landingInputCls =
   'h-10 rounded-md border border-input bg-transparent px-3 py-1 text-sm text-foreground outline-none focus:border-ring focus:ring-[3px] focus:ring-ring/50 disabled:opacity-50'
 
@@ -207,7 +244,7 @@ export function LandingField({ label, hint, className = '', ...input }: { label:
 
 export function LandingButton({ busy, children, type = 'submit', onClick }: { busy?: boolean; children: ReactNode; type?: 'submit' | 'button'; onClick?: () => void }) {
   return (
-    <button type={type} onClick={onClick} disabled={busy} className="h-11 rounded-md bg-foreground text-sm font-medium text-background hover:opacity-90 disabled:opacity-50">
+    <button type={type} onClick={onClick} disabled={busy} className="h-11 rounded-md bg-primary font-medium text-primary-foreground hover:opacity-[.88] disabled:opacity-50">
       {children}
     </button>
   )

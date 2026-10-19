@@ -43,16 +43,24 @@ const ZSTEP = 0.6
 const NZ = 44
 const S2 = 2 * 130 * 130
 
+// `color-mix` of a colour with transparent, for canvas strokes/fills/gradient stops
+// (Canvas 2D accepts color-mix() in current Chromium, Safari and Firefox). The reference
+// script spelled these as colour literals; the port keeps every colour a token resolved
+// from the themed page instead.
+export const alpha = (color: string, pct: number): string => `color-mix(in srgb, ${color} ${pct}%, transparent)`
+
 export function mount(canvas: HTMLCanvasElement, o?: Partial<GridOpts>): () => void {
   const opts = { horizon: 0.5, intensity: 1, flow: 1, ceiling: true, traffic: true, color: '', bg: '', ...o }
   const ctx = canvas.getContext('2d')!
   const off = document.createElement('canvas')
   const octx = off.getContext('2d')!
   const reduce = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false
-  // The reference's fallbacks were the hex #ddea4d / #0a0a0a; no hex in TS, so keep them as rgb().
+  // The themed shell always defines these tokens; the keyword fallbacks are a last resort
+  // for a canvas mounted outside one (the reference's were hard-coded colours).
   const computed = getComputedStyle(canvas)
-  const accent = opts.color || computed.getPropertyValue('--primary').trim() || 'rgb(221, 234, 77)'
-  const bg = opts.bg || computed.getPropertyValue('--background').trim() || 'rgb(10, 10, 10)'
+  const fg = computed.getPropertyValue('--foreground').trim() || 'white'
+  const accent = opts.color || computed.getPropertyValue('--primary').trim() || fg
+  const bg = opts.bg || computed.getPropertyValue('--background').trim() || 'black'
   let W = 0, H = 0, dpr = 1, raf = 0, alive = true
   const m = { x: 0, y: 0, tx: 0, ty: 0, a: 0, on: false, seen: false }
   const trail: TrailPoint[] = []
@@ -180,9 +188,9 @@ export function mount(canvas: HTMLCanvasElement, o?: Partial<GridOpts>): () => v
     if (opts.ceiling) surface(ceil, 1, cx, cy, F, phase, wave)
     ctx.clearRect(0, 0, W, H)
     ctx.lineWidth = 1
-    ctx.strokeStyle = `rgba(255,255,255,${0.15 * opts.intensity})`
+    ctx.strokeStyle = alpha(fg, 15 * opts.intensity)
     ctx.stroke(floor)
-    ctx.strokeStyle = `rgba(255,255,255,${0.07 * opts.intensity})`
+    ctx.strokeStyle = alpha(fg, 7 * opts.intensity)
     if (opts.ceiling) ctx.stroke(ceil)
     if (opts.traffic && !reduce) {
       ctx.strokeStyle = accent
@@ -213,8 +221,8 @@ export function mount(canvas: HTMLCanvasElement, o?: Partial<GridOpts>): () => v
     octx.clearRect(0, 0, W, H)
     const blob = (x: number, y: number, r: number, a: number) => {
       const g = octx.createRadialGradient(x, y, 0, x, y, r)
-      g.addColorStop(0, `rgba(255,255,255,${a})`)
-      g.addColorStop(1, 'rgba(255,255,255,0)')
+      g.addColorStop(0, alpha(fg, a * 100))
+      g.addColorStop(1, alpha(fg, 0))
       octx.fillStyle = g
       octx.fillRect(x - r, y - r, r * 2, r * 2)
     }
@@ -222,7 +230,7 @@ export function mount(canvas: HTMLCanvasElement, o?: Partial<GridOpts>): () => v
     if (m.a > 0.01) blob(m.x, m.y, 210, 0.95 * m.a)
     for (const r of ripples) {
       octx.lineWidth = 50
-      octx.strokeStyle = `rgba(255,255,255,${0.7 * r.a})`
+      octx.strokeStyle = alpha(fg, 70 * r.a)
       octx.beginPath()
       octx.arc(r.x, r.y, r.r, 0, Math.PI * 2)
       octx.stroke()
@@ -236,7 +244,7 @@ export function mount(canvas: HTMLCanvasElement, o?: Partial<GridOpts>): () => v
     const fog = ctx.createRadialGradient(cx, cy, 0, cx, cy, Math.max(W, H) * 0.32)
     fog.addColorStop(0, bg)
     fog.addColorStop(0.35, bg)
-    fog.addColorStop(1, 'rgba(10,10,10,0)')
+    fog.addColorStop(1, alpha(bg, 0))
     ctx.fillStyle = fog
     ctx.fillRect(0, 0, W, H)
     raf = requestAnimationFrame(frame)
