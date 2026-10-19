@@ -5,13 +5,16 @@ import {
   budgetState,
   budgetWarnCopy,
   columnErrorText,
+  commitPick,
   costNanos,
   curlFor,
   forSave,
   rawResponseBody,
   reseedSession,
   replyMeta,
+  saveBody,
   usageReply,
+  type PickState,
 } from './playground'
 import type { BudgetType, GateBudget, PlaygroundModel, Reply, SessionData } from './types'
 
@@ -346,6 +349,52 @@ describe('forSave', () => {
   })
 })
 
+describe('saveBody', () => {
+  it('sends the trimmed name and forSave’s payload', () => {
+    const req = { model: 'gpt-4o', messages: [{ role: 'user' as const, content: 'hi' }], temperature: 0.7, top_p: 1, max_tokens: 512, stream: true }
+    const s = session()
+    s.turns[0].replies[0] = { ...s.turns[0].replies[0]!, request: req }
+    s.turns[1].replies[0] = { model: 'gpt-4o', text: 'yo', tin: 3, tout: 2, costNanos: 100, ms: 10, ttft: 5, request: req }
+    const body = saveBody('  My session  ', s)
+    expect(body.name).toBe('My session')
+    // forSave's strip is applied: the last turn keeps its request, the earlier
+    // turns don't (so the persisted payload can't grow quadratically).
+    expect(body.data.turns[1].replies[0]?.request).toBe(req)
+    expect(JSON.stringify(body.data.turns.slice(0, -1))).not.toContain('request')
+  })
+})
+
+describe('commitPick', () => {
+  const state: PickState = {
+    sessionId: 'old',
+    session: session(),
+    name: 'Old',
+    saved: { name: 'Old', data: session() },
+    pendingId: 'pick-1',
+  }
+  it('sets the id and the data together and clears the pending flag', () => {
+    const data = session()
+    const next = commitPick(state, { id: 'pick-1', name: 'Picked', data })
+    // The id and the data land in the same state object — a commit can never
+    // hold one session's data under another session's id.
+    expect(next.sessionId).toBe('pick-1')
+    expect(next.session).toBe(data)
+    expect(next.saved).toEqual({ name: 'Picked', data })
+    expect(next.name).toBe('Picked')
+    expect(next.pendingId).toBeNull()
+  })
+  it('replaces the previous state’s values wholesale', () => {
+    const data = session()
+    const next = commitPick(state, { id: 'pick-2', name: 'New', data })
+    expect(next.sessionId).toBe('pick-2')
+    expect(next.session).toBe(data)
+    expect(next.name).toBe('New')
+    expect(next.saved?.name).toBe('New')
+    expect(next.saved?.data).toBe(data)
+    expect(next.pendingId).toBeNull()
+  })
+})
+
 describe('reseedSession', () => {
   const usable: PlaygroundModel[] = [
     model,
@@ -355,6 +404,21 @@ describe('reseedSession', () => {
     const s = session()
     s.models = ['old-a', 'old-b']
     expect(reseedSession(s, usable).models).toEqual(['GPT-4o'])
+  })
+  it('re-seeding resets every turn’s replies to the new model list', () => {
+    const s = session()
+    s.models = ['old-a', 'old-b']
+    const out = reseedSession(s, usable)
+    // Each turn's replies line up with the (single) re-seeded model and are
+    // all null, so no old column's answer can show under the new one.
+    for (const t of out.turns) {
+      expect(t.replies).toHaveLength(out.models.length)
+      for (const r of t.replies) expect(r).toBeNull()
+    }
+    // The old columns' answers are dropped, not replayed as history.
+    expect(JSON.stringify(out.turns)).not.toContain('Hi there')
+    // The input is not mutated.
+    expect(s.turns[0].replies[0]?.text).toBe('Hi there')
   })
   it('seeds an empty model list the same way', () => {
     const s = session()

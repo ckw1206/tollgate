@@ -129,7 +129,16 @@ export const rawResponseBody = (r: Reply | null, streaming: boolean): string => 
 export const reseedSession = (data: SessionData, usable: PlaygroundModel[]): SessionData => {
   if (!usable.length) return data
   if (data.models.some((m) => usable.some((x) => x.name === m))) return data
-  return { ...data, models: [usable[0]!.name] }
+  const models = [usable[0]!.name]
+  return {
+    ...data,
+    models,
+    // The saved replies no longer line up with the re-seeded model: kept as
+    // they were, the new column would show the old model's replies/costs and
+    // buildRequest would replay the old answers as history. Reset every turn
+    // so it renders "Not run — model added after this message."
+    turns: data.turns.map((t) => ({ ...t, replies: models.map(() => null) })),
+  }
 }
 
 // The session payload for save. The Raw view and Copy as cURL only read the
@@ -151,6 +160,36 @@ export const forSave = (data: SessionData): SessionData => {
     ),
   }
 }
+
+// The exact JSON body the page PUTs/POSTs when saving a session: the trimmed
+// name and forSave's payload (only the last turn keeps its stored request, so
+// the body stays linear in the number of turns).
+export const saveBody = (name: string, session: SessionData): { name: string; data: SessionData } => ({
+  name: name.trim(),
+  data: forSave(session),
+})
+
+// The page state a session pick commits into.
+export interface PickState {
+  sessionId: string | null
+  session: SessionData
+  name: string
+  saved: { name: string; data: SessionData } | null
+  pendingId: string | null
+}
+
+// The commit of a session pick: the loaded session's id and data are set
+// together and the pending flag is cleared, so the editor and the id can
+// never disagree (Save could then PUT session A's data to session B). Pure,
+// so the atomicity is testable without a DOM.
+export const commitPick = (state: PickState, loaded: { id: string; name: string; data: SessionData }): PickState => ({
+  ...state,
+  sessionId: loaded.id,
+  session: loaded.data,
+  name: loaded.name,
+  saved: { name: loaded.name, data: loaded.data },
+  pendingId: null,
+})
 
 // >= 80% warns, >= 100% blocks; no budget (null or unlimited) is ok at 0.
 export const budgetState = (b: GateBudget | null): { pct: number; level: 'ok' | 'warn' | 'block' } => {

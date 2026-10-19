@@ -8,11 +8,12 @@ import {
   budgetState,
   budgetWarnCopy,
   columnErrorText,
+  commitPick,
   curlFor,
-  forSave,
   rawResponseBody,
   reseedSession,
   replyMeta,
+  saveBody,
   usageReply,
 } from '../playground'
 import type { GateBudget, GateInfo, PlaygroundModel, Reply, SessionData, Turn } from '../types'
@@ -69,7 +70,7 @@ const normalize = (d: Partial<SessionData> | null | undefined): SessionData => (
 
 // MaxTokensInput: draft like DayInput — only whole numbers >= 1 reach state,
 // blur resets a partial draft.
-function MaxTokensInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
+function MaxTokensInput({ value, onCommit, disabled = false }: { value: number; onCommit: (n: number) => void; disabled?: boolean }) {
   const [draft, setDraft] = useState(String(value))
   useEffect(() => setDraft(String(value)), [value])
   return (
@@ -79,6 +80,7 @@ function MaxTokensInput({ value, onCommit }: { value: number; onCommit: (n: numb
       aria-label="Max tokens"
       className={controlCls + ' mt-1 block h-9 w-full text-sm'}
       value={draft}
+      disabled={disabled}
       onChange={(e) => {
         setDraft(e.target.value)
         const n = Number(e.target.value)
@@ -262,7 +264,9 @@ export default function Playground() {
   const send = () => {
     const text = prompt.trim()
     const slots = session.models
-    if (!text || running || !slots.length || level === 'block') return
+    // No sends while a session pick is pending: the commit would replace the
+    // session and orphan the in-flight turn.
+    if (!text || running || pendingId !== null || !slots.length || level === 'block') return
     const turn: Turn = { user: text, replies: slots.map(() => null) }
     const next: SessionData = { ...session, turns: [...session.turns, turn] }
     const seq = ++seqRef.current
@@ -295,14 +299,23 @@ export default function Playground() {
       const row = await api<SessionRow>(`${SESSIONS}/${id}`)
       if (n !== pickSeqRef.current) return // a newer pick (or New) superseded this GET
       const data = normalize(row.data)
-      // Commit the loaded session and its id together: the editor and the id
-      // can never disagree, so Save can't PUT this data to another session.
-      // (A session whose models are all stale is re-seeded by the effect.)
-      setSession(data)
-      setName(row.name)
-      setSessionId(row.id)
-      setSaved({ name: row.name, data })
-      setPendingId(null)
+      // Commit the loaded session and its id together (commitPick): the
+      // editor and the id can never disagree, so Save can't PUT this data to
+      // another session. (A session whose models are all stale is re-seeded
+      // by the effect.)
+      const next = commitPick({ sessionId, session, name, saved, pendingId }, { id: row.id, name: row.name, data })
+      // Kill whatever was in flight before the pick: no late chunk or
+      // finisher from the old session may write into the one just loaded.
+      // (The start-of-pick bump already covered ordinary sends; this covers
+      // anything that slipped past it.)
+      abortAll()
+      seqRef.current += 1
+      setSession(next.session)
+      setName(next.name)
+      setSessionId(next.sessionId)
+      setSaved(next.saved)
+      setPendingId(next.pendingId)
+      setRunning(false)
       setLive({})
       setBannerGone(null)
     } catch (e) {
@@ -341,16 +354,16 @@ export default function Playground() {
   const save = async () => {
     const n = name.trim()
     if (!n || saving) return
-    // Persist only the last turn's requests (forSave): keeping the full
-    // history inside every reply would grow the payload quadratically and
-    // hit the server's 1 MiB body cap.
-    const body = forSave(session)
+    // The exact body that goes out (saveBody -> forSave): only the last turn
+    // keeps its stored request, so the payload stays linear and under the
+    // server's 1 MiB body cap.
+    const body = saveBody(n, session)
     setSaving(true)
     setSaveError('')
     try {
       const row = sessionId
-        ? await api<SessionRow>(`${SESSIONS}/${sessionId}`, { method: 'PUT', body: { name: n, data: body } })
-        : await api<SessionRow>(SESSIONS, { method: 'POST', body: { name: n, data: body } })
+        ? await api<SessionRow>(`${SESSIONS}/${sessionId}`, { method: 'PUT', body })
+        : await api<SessionRow>(SESSIONS, { method: 'POST', body })
       setSessionId(row.id)
       setName(row.name)
       setSaved({ name: row.name, data: session }) // the unsliced snapshot keeps dirty=false
@@ -386,7 +399,7 @@ export default function Playground() {
         ? '1 model you can use.'
         : `${usable.length} models you can use.`
     : ''
-  const canSend = prompt.trim() !== '' && session.models.length > 0 && !running && level !== 'block'
+  const canSend = prompt.trim() !== '' && session.models.length > 0 && !running && pendingId === null && level !== 'block'
   const placeholder =
     level === 'block'
       ? budget?.type === 'daily'
@@ -471,7 +484,15 @@ export default function Playground() {
                 </option>
               ))}
             </select>
-            <input className={inputCls} aria-label="Session name" placeholder="Untitled" maxLength={120} value={name} onChange={(e) => setName(e.target.value)} />
+            <input
+              className={inputCls}
+              aria-label="Session name"
+              placeholder="Untitled"
+              maxLength={120}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={pendingId !== null}
+            />
             <div className="mt-2 flex items-center gap-2">
               {/* Disabled while running (saving mid-run would persist the
                   in-flight turn's null replies as "Not run") and while a
@@ -514,7 +535,7 @@ export default function Playground() {
                   <button
                     type="button"
                     aria-label={`Remove ${m}`}
-                    disabled={running}
+                    disabled={running || pendingId !== null}
                     onClick={() => removeSlot(i)}
                     className="shrink-0 px-1 text-lg leading-none text-muted-foreground hover:opacity-70 disabled:opacity-30"
                   >
@@ -524,7 +545,14 @@ export default function Playground() {
               </div>
             ))}
             {session.models.length < MAX_MODELS && (
-              <Button type="button" size="sm" variant="ghost" className="mt-2 w-full" onClick={addSlot} disabled={running || !models.data?.length}>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="mt-2 w-full"
+                onClick={addSlot}
+                disabled={running || pendingId !== null || !models.data?.length}
+              >
                 + Compare another model
               </Button>
             )}
@@ -538,6 +566,7 @@ export default function Playground() {
               className={inputCls + ' resize-y'}
               value={session.system}
               onChange={(e) => patch({ system: e.target.value })}
+              disabled={pendingId !== null}
             />
           </section>
           <section className="border-t border-border pt-4">
@@ -557,6 +586,7 @@ export default function Playground() {
                   value={session.temperature}
                   onChange={(e) => patch({ temperature: Number(e.target.value) })}
                   className="mt-1 w-full accent-primary"
+                  disabled={pendingId !== null}
                 />
               </label>
               <label className="block text-sm">
@@ -573,15 +603,16 @@ export default function Playground() {
                   value={session.top_p}
                   onChange={(e) => patch({ top_p: Number(e.target.value) })}
                   className="mt-1 w-full accent-primary"
+                  disabled={pendingId !== null}
                 />
               </label>
               <label className="block text-sm">
                 <span className="font-medium">Max tokens</span>
-                <MaxTokensInput value={session.max_tokens} onCommit={(n) => patch({ max_tokens: n })} />
+                <MaxTokensInput value={session.max_tokens} onCommit={(n) => patch({ max_tokens: n })} disabled={pendingId !== null} />
               </label>
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium">Stream</span>
-                <CheckButton on={session.stream} aria-label="Stream" onClick={() => patch({ stream: !session.stream })} />
+                <CheckButton on={session.stream} aria-label="Stream" onClick={() => patch({ stream: !session.stream })} disabled={pendingId !== null} />
               </div>
             </div>
           </section>
@@ -590,7 +621,7 @@ export default function Playground() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
             <Segmented label="View" value={view} onChange={setView} options={[{ value: 'chat', label: 'Chat' }, { value: 'raw', label: 'Raw' }]} />
             <span className="text-xs text-muted-foreground">Runs as you · no API key</span>
-            <Button variant="ghost" size="sm" onClick={clear} disabled={running || session.turns.length === 0}>
+            <Button variant="ghost" size="sm" onClick={clear} disabled={running || pendingId !== null || session.turns.length === 0}>
               Clear
             </Button>
           </div>
@@ -678,6 +709,7 @@ export default function Playground() {
                     send()
                   }
                 }}
+                disabled={pendingId !== null}
               />
               <Button onClick={send} disabled={!canSend}>
                 {running ? 'Running…' : 'Send'}
