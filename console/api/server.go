@@ -22,6 +22,7 @@ type Server struct {
 	Cache           *cache.Cache
 	Sessions        *auth.Sessions
 	Vault           *vault.Vault
+	Gateway         *api.Server                 // the /v1 server: the playground runs its chat path through ChatAs
 	Reload          func(context.Context) error // rebuild the model registry after model/credential writes
 	BaseURL         string
 	TrustedProxies  []netip.Prefix

@@ -24,15 +24,16 @@ const (
 	AuditRead     Permission = "audit:read"
 	SettingsRead  Permission = "settings:read"
 	SettingsWrite Permission = "settings:write"
+	PlaygroundUse Permission = "playground:use"
 )
 
 var viewer = []Permission{ModelsRead, KeysReadOwn, GroupsReadOwn, SpendReadOwn}
 
 var roles = map[string][]Permission{
 	"viewer": viewer,
-	"member": append(slices.Clone(viewer), KeysWriteOwn),
+	"member": append(slices.Clone(viewer), KeysWriteOwn, PlaygroundUse),
 	"admin": {ModelsRead, ModelsWrite, KeysReadOwn, KeysWriteOwn, KeysReadAll, KeysWriteAll, UsersRead, UsersWrite,
-		GroupsReadOwn, GroupsReadAll, GroupsWrite, InvitesRead, InvitesWrite, SpendReadOwn, SpendReadAll, AuditRead, SettingsRead, SettingsWrite},
+		GroupsReadOwn, GroupsReadAll, GroupsWrite, InvitesRead, InvitesWrite, SpendReadOwn, SpendReadAll, AuditRead, SettingsRead, SettingsWrite, PlaygroundUse},
 }
 
 func Permissions(role string) []Permission { return roles[role] }
