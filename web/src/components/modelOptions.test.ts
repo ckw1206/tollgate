@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Group, Model } from '../types'
-import { extraModelOptions } from './modelOptions'
+import { buildUserUpdateBody, extraModelOptions } from './modelOptions'
 
 const model = (name: string, enabled: boolean): Model => ({
   id: name,
@@ -60,5 +60,26 @@ describe('extraModelOptions', () => {
     const r = extraModelOptions(null, group(['a']), ['b'])
     expect(r.options).toEqual([])
     expect(r.stale).toEqual([])
+  })
+})
+
+describe('buildUserUpdateBody', () => {
+  const base = { role: 'member' as const, group_id: 'g', extra: ['b'], enabled: true, password: '', group: undefined as Group | undefined }
+
+  it('preserves extras when the group is unresolved (unknown group_id)', () => {
+    expect(buildUserUpdateBody({ ...base, group: undefined }).extra_models).toEqual(['b'])
+  })
+
+  it('clears extras when a resolved group allows all models', () => {
+    expect(buildUserUpdateBody({ ...base, group: group([]) }).extra_models).toEqual([])
+  })
+
+  it('passes extras through for a normal resolved group', () => {
+    expect(buildUserUpdateBody({ ...base, group: group(['a']) }).extra_models).toEqual(['b'])
+  })
+
+  it('omits the password field when blank, includes it when set', () => {
+    expect(buildUserUpdateBody(base)).not.toHaveProperty('password')
+    expect(buildUserUpdateBody({ ...base, password: 'x'.repeat(12) }).password).toBe('x'.repeat(12))
   })
 })

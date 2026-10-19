@@ -2,7 +2,7 @@ import { useId, useState, type FormEvent } from 'react'
 import { api } from '../api'
 import type { Group, Model, Role, User } from '../types'
 import { Button, ConfirmDialog, ErrorText, Field, inputCls, Modal, ModalFooter, MultiSelect, useLoad } from './ui'
-import { extraModelOptions } from './modelOptions'
+import { buildUserUpdateBody, extraModelOptions } from './modelOptions'
 
 // EditUserDialog: the one Edit action on a Users row (role, group, extra model grants,
 // enabled, password reset). Disabling an enabled user asks for confirmation first.
@@ -33,10 +33,7 @@ export default function EditUserDialog({ user, groups, onClose, onSaved }: { use
     }
     setBusy(true)
     setError('')
-    // Clear extras only when a group is resolved and it allows all models
-    // (the field is hidden then); an unknown group keeps the user's existing
-    // extras instead of silently wiping them.
-    const body = { role, group_id, extra_models: group && group.models.length === 0 ? [] : extra, disabled: !enabled, ...(password ? { password } : {}) }
+    const body = buildUserUpdateBody({ role, group_id, extra, enabled, password, group })
     try {
       await api(`/console/api/v1/users/${user.id}`, { method: 'PUT', body })
       onSaved()
