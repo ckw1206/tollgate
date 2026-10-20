@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, api, apiStream, usd } from '../api'
 import { useAuth } from '../auth'
 import { useGate } from '../components/GateBar'
@@ -11,6 +11,8 @@ import {
   columnErrorText,
   commitPick,
   curlFor,
+  isSendKey,
+  randomName,
   rawResponseBody,
   reseedSession,
   replyMeta,
@@ -28,7 +30,11 @@ const MAX_MODELS = 3
 // D2: panel labels — Geist Mono 11px, uppercase.
 const labelCls = 'font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground'
 
-const emptySession = (): SessionData => ({ models: [], system: '', temperature: 0.7, top_p: 1, max_tokens: 512, stream: true, turns: [] })
+const DEFAULT_SYSTEM = 'You are a helpful assistant.'
+
+// New sessions start with an editable default system prompt; a cleared box
+// stays cleared (no system message is sent).
+const emptySession = (): SessionData => ({ models: [], system: DEFAULT_SYSTEM, temperature: 0.7, top_p: 1, max_tokens: 512, stream: true, turns: [] })
 
 interface SessionMeta {
   id: string
@@ -104,6 +110,9 @@ export default function Playground() {
 
   const [session, setSession] = useState<SessionData>(emptySession)
   const [name, setName] = useState('')
+  // Picked when the session starts; shown as the name placeholder and saved
+  // as the title if the user leaves the name blank.
+  const [autoName, setAutoName] = useState(() => randomName())
   const [sessionId, setSessionId] = useState<string | null>(null)
   // The session a pick is loading. The select shows it while the GET is in
   // flight, but sessionId only commits together with the loaded data — so
@@ -135,6 +144,29 @@ export default function Playground() {
   const pendingRef = useRef(0)
   const pickSeqRef = useRef(0)
   const controllersRef = useRef(new Map<number, AbortController>())
+
+  // The run area fills the viewport below its own top edge (min 420px, which
+  // is what a stacked mobile layout gets) and scrolls internally, so the
+  // composer stays put while a chat grows. 32 = main's bottom padding.
+  const runRef = useRef<HTMLElement>(null)
+  const [runH, setRunH] = useState<number>()
+  useLayoutEffect(() => {
+    const fit = () => {
+      const el = runRef.current
+      if (el) setRunH(Math.max(420, window.innerHeight - (el.getBoundingClientRect().top + window.scrollY) - 32))
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [models.error, list.error, loadError])
+
+  // Follow new output unless the user has scrolled up to read.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickRef = useRef(true)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight
+  }, [session.turns, live, view])
 
   const abortAll = () => {
     for (const c of controllersRef.current.values()) c.abort()
@@ -284,6 +316,7 @@ export default function Playground() {
     setSession(next)
     setPrompt('')
     setRunning(true)
+    stickRef.current = true
     // Every column is live from t=0 (empty text until the first chunk), so a
     // slow TTFT never flashes the "not run" note.
     setLive(Object.fromEntries(slots.map((_, i) => [i, { text: '', request: reqs[i]! }])))
@@ -343,6 +376,7 @@ export default function Playground() {
     const first = models.data?.[0]?.name
     setSession(first ? { ...emptySession(), models: [first] } : emptySession())
     setName('')
+    setAutoName(randomName())
     setSessionId(null)
     setPendingId(null)
     setSaved(null)
@@ -360,8 +394,8 @@ export default function Playground() {
   }
 
   const save = async () => {
-    const n = name.trim()
-    if (!n || saving) return
+    const n = name.trim() || autoName
+    if (saving) return
     // The exact body that goes out (saveBody -> forSave): only the last turn
     // keeps its stored request, so the payload stays linear and under the
     // server's 1 MiB body cap.
@@ -413,7 +447,7 @@ export default function Playground() {
       ? budget?.type === 'daily'
         ? 'Daily budget reached'
         : 'Budget reached'
-      : `Message ${session.models.length === 1 ? session.models[0] : `${session.models.length} models`}… ⌘↵ to send`
+      : `Message ${session.models.length === 1 ? session.models[0] : `${session.models.length} models`}… ↵ to send, ⇧↵ for a new line`
 
   const columnHeader = (slot: number) => (
     <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -495,7 +529,7 @@ export default function Playground() {
             <input
               className={inputCls}
               aria-label="Session name"
-              placeholder="Untitled"
+              placeholder={autoName}
               maxLength={120}
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -505,7 +539,7 @@ export default function Playground() {
               {/* Disabled while running (saving mid-run would persist the
                   in-flight turn's null replies as "Not run") and while a
                   pick is pending (sessionId could disagree with the editor). */}
-              <Button size="sm" onClick={() => void save()} disabled={saving || running || pendingId !== null || !dirty || !name.trim()}>
+              <Button size="sm" onClick={() => void save()} disabled={saving || running || pendingId !== null || !dirty}>
                 {dirty ? 'Save' : 'Saved'}
               </Button>
               <Button size="sm" variant="ghost" onClick={newSession} disabled={running || pendingId !== null}>
@@ -517,7 +551,7 @@ export default function Playground() {
           </section>
           <section className="border-t border-border pt-4">
             <h2 className={labelCls}>
-              Models {session.models.length} / {MAX_MODELS}
+              Models {session.models.length} / {usable.length}
             </h2>
             {session.models.map((m, i) => (
               <div key={i} className="mt-1.5 flex items-center gap-1">
@@ -625,7 +659,7 @@ export default function Playground() {
             </div>
           </section>
         </aside>
-        <section className="flex min-w-0 flex-col rounded-lg border border-border bg-card">
+        <section ref={runRef} style={{ height: runH }} className="flex min-w-0 flex-col rounded-lg border border-border bg-card">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
             <Segmented label="View" value={view} onChange={setView} options={[{ value: 'chat', label: 'Chat' }, { value: 'raw', label: 'Raw' }]} />
             <span className="text-xs text-muted-foreground">Runs as you · no API key</span>
@@ -633,7 +667,14 @@ export default function Playground() {
               Clear
             </Button>
           </div>
-          <div className="min-h-[280px] flex-1 p-4">
+          <div
+            ref={scrollRef}
+            className="min-h-0 flex-1 overflow-y-auto p-4"
+            onScroll={(e) => {
+              const el = e.currentTarget
+              stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+            }}
+          >
             {session.turns.length === 0 ? (
               // Same empty state for Chat and Raw (Raw only shows once there
               // are turns): a skeleton while the model list is loading or a
@@ -715,12 +756,12 @@ export default function Playground() {
               <textarea
                 rows={2}
                 aria-label="Message"
-                className={controlCls + ' w-full resize-y text-sm'}
+                className={controlCls + ' max-h-48 w-full resize-y text-sm'}
                 placeholder={placeholder}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  if (isSendKey(e.nativeEvent)) {
                     e.preventDefault()
                     send()
                   }

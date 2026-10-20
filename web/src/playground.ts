@@ -249,3 +249,16 @@ export const curlFor = (req: object): string =>
 
 // Single-quote for the shell: an embedded ' becomes '\''.
 const shellQuote = (s: string) => "'" + s.replaceAll("'", `'\\''`) + "'"
+
+// A fresh session's title when the user leaves the name blank, e.g. "Brisk Heron".
+const ADJECTIVES = ['Amber', 'Brisk', 'Calm', 'Clever', 'Dapper', 'Eager', 'Gentle', 'Golden', 'Lively', 'Lucky', 'Mellow', 'Nimble', 'Quiet', 'Rapid', 'Sunny', 'Swift']
+const NOUNS = ['Badger', 'Comet', 'Falcon', 'Fox', 'Harbor', 'Heron', 'Lantern', 'Maple', 'Meadow', 'Otter', 'Pine', 'Raven', 'River', 'Sparrow', 'Summit', 'Willow']
+export const randomName = (rand: () => number = Math.random): string => {
+  const pick = (a: string[]) => a[Math.floor(rand() * a.length)]!
+  return `${pick(ADJECTIVES)} ${pick(NOUNS)}`
+}
+
+// Enter sends, Shift+Enter is a newline; never while an IME is composing
+// (keyCode 229 covers Safari, which ends composition before keydown).
+export const isSendKey = (e: { key: string; shiftKey: boolean; isComposing?: boolean; keyCode?: number }): boolean =>
+  e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229

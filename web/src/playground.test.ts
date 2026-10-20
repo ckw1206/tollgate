@@ -9,6 +9,8 @@ import {
   costNanos,
   curlFor,
   forSave,
+  isSendKey,
+  randomName,
   rawResponseBody,
   reseedSession,
   replyMeta,
@@ -453,5 +455,23 @@ describe('curlFor', () => {
     expect(curl).toBe(
       `curl $TOLLGATE_URL/v1/chat/completions -H "Authorization: Bearer $TOLLGATE_KEY" -H "Content-Type: application/json" -d '{"model":"m","messages":[{"role":"user","content":"it'\\''s"}]}'`,
     )
+  })
+})
+
+describe('randomName', () => {
+  it('builds "Adjective Noun" from the picker', () => {
+    expect(randomName(() => 0)).toBe('Amber Badger')
+    expect(randomName(() => 0.999)).toBe('Swift Willow')
+    expect(randomName()).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/)
+  })
+})
+
+describe('isSendKey', () => {
+  it('sends on Enter, not Shift+Enter or mid-composition', () => {
+    expect(isSendKey({ key: 'Enter', shiftKey: false })).toBe(true)
+    expect(isSendKey({ key: 'Enter', shiftKey: true })).toBe(false)
+    expect(isSendKey({ key: 'Enter', shiftKey: false, isComposing: true })).toBe(false)
+    expect(isSendKey({ key: 'Enter', shiftKey: false, keyCode: 229 })).toBe(false)
+    expect(isSendKey({ key: 'a', shiftKey: false })).toBe(false)
   })
 })
