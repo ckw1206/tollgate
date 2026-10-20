@@ -89,7 +89,7 @@ const normalize = (d: Partial<SessionData> | null | undefined): SessionData => (
 // collapsed once the answer starts (and on finished replies).
 function Thinking({ text, live }: { text: string; live: boolean }) {
   return (
-    <details open={live} className="mb-2 whitespace-normal">
+    <details open={live} className="mb-1.5 whitespace-normal">
       <summary className={labelCls + ' cursor-pointer select-none'}>{live ? 'Thinking…' : 'Thought'}</summary>
       <div className="mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-l border-border pl-2.5 text-[12px] text-muted-foreground">{text}</div>
     </details>
@@ -511,8 +511,8 @@ export default function Playground() {
         </div>
         {streaming ? (
           <div className="whitespace-pre-wrap break-words text-[13px]">
-            {lv.reasoning && <Thinking text={lv.reasoning} live={!lv.text} />}
-            {lv.text}
+            {lv.reasoning && <Thinking text={lv.reasoning} live={!lv.text.trimStart()} />}
+            {lv.text.trimStart()}
             <span aria-hidden className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-foreground align-[-2px]" />
           </div>
         ) : !r ? (
@@ -522,7 +522,7 @@ export default function Playground() {
         ) : (
           <div>
             {r.reasoning && <Thinking text={r.reasoning} live={false} />}
-            <div className="whitespace-pre-wrap break-words text-[13px]">{r.text || <span className="text-muted-foreground">(empty response)</span>}</div>
+            <div className="whitespace-pre-wrap break-words text-[13px]">{r.text.trimStart() || <span className="text-muted-foreground">(empty response)</span>}</div>
             <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">{replyMeta(r)}</div>
           </div>
         )}
