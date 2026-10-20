@@ -233,3 +233,35 @@ func errCode(t *testing.T, w *httptest.ResponseRecorder) string {
 	}
 	return b.Error.Code
 }
+
+// TestPlaygroundSessions_CapPerUser: create past the cap is a 409; updates
+// still work, the cap is per user, and deleting one frees a slot.
+func TestPlaygroundSessions_CapPerUser(t *testing.T) {
+	e := newTenv(t)
+	ctx := context.Background()
+	var last *repo.PlaygroundSession
+	for i := 0; i < repo.MaxPlaygroundSessions; i++ {
+		ps, err := e.store.CreatePlaygroundSession(ctx, e.member.ID, "s", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last = ps
+	}
+	body := map[string]any{"name": "one more", "data": map[string]any{}}
+	w := e.as("member@x.io", "POST", p+"/playground/sessions", body)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "session_limit") {
+		t.Fatalf("create past cap: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("member@x.io", "PUT", p+"/playground/sessions/"+last.ID, body); w.Code != 200 {
+		t.Fatalf("update at cap: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("admin@x.io", "POST", p+"/playground/sessions", body); w.Code != 201 {
+		t.Fatalf("another user at the member's cap: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("member@x.io", "DELETE", p+"/playground/sessions/"+last.ID, nil); w.Code != 204 {
+		t.Fatalf("delete: %d %s", w.Code, w.Body)
+	}
+	if w := e.as("member@x.io", "POST", p+"/playground/sessions", body); w.Code != 201 {
+		t.Fatalf("create after delete: %d %s", w.Code, w.Body)
+	}
+}

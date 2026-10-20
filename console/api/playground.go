@@ -2,6 +2,8 @@ package consoleapi
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"time"
 	"unicode/utf8"
@@ -162,6 +164,11 @@ func (s *Server) createPlaygroundSession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	p, err := s.Store.CreatePlaygroundSession(r.Context(), auth.UserFrom(r.Context()).ID, in.Name, in.Data)
+	if errors.Is(err, repo.ErrSessionLimit) {
+		api.WriteError(w, 409, "invalid_request_error", "session_limit",
+			fmt.Sprintf("You have %d saved sessions. Delete one to save another.", repo.MaxPlaygroundSessions))
+		return
+	}
 	if err != nil {
 		storeErr(w, err)
 		return

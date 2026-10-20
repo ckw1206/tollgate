@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, api, apiStream, usd } from '../api'
 import { useAuth } from '../auth'
 import { useGate } from '../components/GateBar'
-import { Banner, Button, CheckButton, CopyButton, controlCls, ErrorText, inputCls, PageHeader, Segmented, Skeleton, useLoad } from '../components/ui'
+import { Banner, Button, CheckButton, ConfirmDialog, CopyButton, controlCls, ErrorText, inputCls, PageHeader, Segmented, Skeleton, useLoad } from '../components/ui'
 import {
   buildRequest,
   budgetBlockCopy,
@@ -27,6 +27,7 @@ import type { GateBudget, PlaygroundModel, Reply, SessionData, Turn } from '../t
 const CHAT = '/console/api/v1/playground/chat/completions'
 const SESSIONS = '/console/api/v1/playground/sessions'
 const MAX_MODELS = 3
+const MAX_SESSIONS = 50 // server cap per user (repo.MaxPlaygroundSessions)
 
 // D2: panel labels — Geist Mono 11px, uppercase.
 const labelCls = 'font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground'
@@ -151,6 +152,7 @@ export default function Playground() {
   // In-flight text per slot, plus the exact request sent for that column.
   const [live, setLive] = useState<Record<number, { text: string; reasoning: string; request: object }>>({})
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [loadError, setLoadError] = useState('')
   // The warn banner can be dismissed for the page's lifetime; the block
@@ -443,6 +445,14 @@ export default function Playground() {
     }
   }
 
+  // Delete the loaded session and start fresh; the list reload frees the slot.
+  const remove = async () => {
+    if (!sessionId) return
+    await api(`${SESSIONS}/${sessionId}`, { method: 'DELETE' })
+    newSession()
+    void list.reload()
+  }
+
   const modelById = new Map((models.data ?? []).map((m) => [m.name, m]))
   // The running total for one column; any reply with an unknown cost
   // (streamed without a usage chunk) would undercount it, so flag it with +.
@@ -573,7 +583,14 @@ export default function Playground() {
               <Button size="sm" variant="ghost" onClick={newSession} disabled={running || pendingId !== null}>
                 New
               </Button>
-              <span className="text-xs text-muted-foreground">Private to you.</span>
+              {sessionId && (
+                <Button size="sm" variant="ghost" onClick={() => setDeleting(true)} disabled={running || pendingId !== null}>
+                  Delete
+                </Button>
+              )}
+            </div>
+            <div className="mt-1.5 text-xs text-muted-foreground">
+              Private to you · {list.data?.length ?? 0} / {MAX_SESSIONS} saved
             </div>
             <ErrorText>{saveError}</ErrorText>
           </section>
@@ -803,6 +820,15 @@ export default function Playground() {
           </div>
         </section>
       </div>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete "${name.trim() || 'this session'}"?`}
+          body="The saved conversation is removed for good."
+          confirm="Delete"
+          onConfirm={remove}
+          onClose={() => setDeleting(false)}
+        />
+      )}
     </>
   )
 }

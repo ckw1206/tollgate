@@ -3,8 +3,16 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
+
+// MaxPlaygroundSessions caps saved sessions per user; updates never count.
+const MaxPlaygroundSessions = 50
+
+var ErrSessionLimit = errors.New("playground session limit reached")
 
 // PlaygroundSession is a saved playground conversation, private to its owner.
 // Every query is scoped by user_id, so another user's session is indistinguishable
@@ -52,11 +60,17 @@ func (s *Store) CreatePlaygroundSession(ctx context.Context, userID, name string
 	if data == nil {
 		data = json.RawMessage(`{}`)
 	}
+	// ponytail: count-then-insert in one statement; two creates racing at 49
+	// can both land (51). Harmless for a soft cap — lock the user row if it must be exact.
 	var p PlaygroundSession
 	err := s.pool.QueryRow(ctx,
-		`INSERT INTO playground_sessions (user_id, name, data) VALUES ($1, $2, $3)
+		`INSERT INTO playground_sessions (user_id, name, data)
+		 SELECT $1, $2, $3 WHERE (SELECT count(*) FROM playground_sessions WHERE user_id = $1) < $4
 		 RETURNING id, user_id, name, data, created_at, updated_at`,
-		userID, name, data).Scan(&p.ID, &p.UserID, &p.Name, &p.Data, &p.CreatedAt, &p.UpdatedAt)
+		userID, name, data, MaxPlaygroundSessions).Scan(&p.ID, &p.UserID, &p.Name, &p.Data, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrSessionLimit
+	}
 	return &p, err
 }
 
