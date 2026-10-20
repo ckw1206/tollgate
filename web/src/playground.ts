@@ -262,3 +262,10 @@ export const randomName = (rand: () => number = Math.random): string => {
 // (keyCode 229 covers Safari, which ends composition before keydown).
 export const isSendKey = (e: { key: string; shiftKey: boolean; isComposing?: boolean; keyCode?: number }): boolean =>
   e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229
+
+// A reasoning model's thinking on a delta or message: vLLM/DeepSeek-style
+// servers send reasoning_content, others reasoning. '' when absent.
+export const reasoningOf = (part: { reasoning_content?: unknown; reasoning?: unknown } | undefined): string => {
+  const r = part?.reasoning_content ?? part?.reasoning
+  return typeof r === 'string' ? r : ''
+}

@@ -12,6 +12,7 @@ import {
   commitPick,
   curlFor,
   isSendKey,
+  reasoningOf,
   randomName,
   rawResponseBody,
   reseedSession,
@@ -30,7 +31,13 @@ const MAX_MODELS = 3
 // D2: panel labels — Geist Mono 11px, uppercase.
 const labelCls = 'font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground'
 
-const DEFAULT_SYSTEM = 'You are a helpful assistant.'
+const DEFAULT_SYSTEM = `You are a helpful, knowledgeable assistant.
+
+- Answer clearly and concisely; lead with the answer, then the detail that matters.
+- Use Markdown for structure: short paragraphs, lists, and fenced code blocks with a language tag.
+- If a request is ambiguous, ask one short clarifying question instead of guessing.
+- If you are not sure, say so. Never invent facts, citations, APIs or numbers.
+- Match the user's language and tone.`
 
 // New sessions start with an editable default system prompt; a cleared box
 // stays cleared (no system message is sent).
@@ -48,11 +55,13 @@ interface SessionRow {
   data: SessionData
 }
 
+type Part = { content?: string; reasoning_content?: string; reasoning?: string }
+
 // One SSE data payload (or the single non-stream JSON body): OpenAI-shaped,
 // normalised by the gateway for all three providers.
 interface Chunk {
   id?: string
-  choices?: { delta?: { content?: string }; message?: { content?: string }; finish_reason?: string }[]
+  choices?: { delta?: Part; message?: Part; finish_reason?: string }[]
   usage?: { prompt_tokens: number; completion_tokens: number; prompt_tokens_details?: { cached_tokens?: number } }
   error?: { message?: string; code?: string } // in-stream failure (sent after the stream started)
 }
@@ -74,6 +83,17 @@ const normalize = (d: Partial<SessionData> | null | undefined): SessionData => (
       replies: (Array.isArray(t.replies) ? t.replies : []).map((r) => (r ? { ...DEFAULT_REPLY, ...r } : null)),
     })),
 })
+
+// A reasoning model's thinking: open while it streams before the answer,
+// collapsed once the answer starts (and on finished replies).
+function Thinking({ text, live }: { text: string; live: boolean }) {
+  return (
+    <details open={live} className="mb-2 whitespace-normal">
+      <summary className={labelCls + ' cursor-pointer select-none'}>{live ? 'Thinking…' : 'Thought'}</summary>
+      <div className="mt-1.5 max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-l border-border pl-2.5 text-[12px] text-muted-foreground">{text}</div>
+    </details>
+  )
+}
 
 // MaxTokensInput: draft like DayInput — only whole numbers >= 1 reach state,
 // blur resets a partial draft.
@@ -129,7 +149,7 @@ export default function Playground() {
   const [prompt, setPrompt] = useState('')
   const [running, setRunning] = useState(false)
   // In-flight text per slot, plus the exact request sent for that column.
-  const [live, setLive] = useState<Record<number, { text: string; request: object }>>({})
+  const [live, setLive] = useState<Record<number, { text: string; reasoning: string; request: object }>>({})
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [loadError, setLoadError] = useState('')
@@ -221,6 +241,7 @@ export default function Playground() {
     const t0 = performance.now()
     let ttft = 0
     let text = ''
+    let reasoning = ''
     // Written from onEvent (a closure): an object keeps them readable after
     // the stream without fighting the narrowing on closure-assigned lets.
     const st = {
@@ -238,17 +259,21 @@ export default function Playground() {
         st.err = { message: c.error.message ?? 'error', code: c.error.code }
         return
       }
-      const delta = c.choices?.[0]?.delta?.content
-      if (delta) {
-        if (!ttft) ttft = performance.now() - t0 // TTFT = first content chunk
-        text += delta
-        setLive((l) => ({ ...l, [slot]: { text, request: req } }))
-      }
-      const msg = c.choices?.[0]?.message?.content
-      if (typeof msg === 'string') {
+      // TTFT = the first token of any kind, thinking included.
+      const d0 = c.choices?.[0]?.delta
+      const think = reasoningOf(d0)
+      if (d0?.content || think) {
         if (!ttft) ttft = performance.now() - t0
-        text = msg
-        setLive((l) => ({ ...l, [slot]: { text, request: req } }))
+        text += d0?.content ?? ''
+        reasoning += think
+        setLive((l) => ({ ...l, [slot]: { text, reasoning, request: req } }))
+      }
+      const msg = c.choices?.[0]?.message
+      if (typeof msg?.content === 'string') {
+        if (!ttft) ttft = performance.now() - t0
+        text = msg.content
+        reasoning = reasoningOf(msg)
+        setLive((l) => ({ ...l, [slot]: { text, reasoning, request: req } }))
       }
       if (c.usage) st.usage = c.usage
     }
@@ -281,6 +306,7 @@ export default function Playground() {
     const reply: Reply = {
       model,
       text: fail ? '' : text,
+      ...(!fail && reasoning ? { reasoning } : {}),
       tin: u?.tin ?? null,
       tout: u?.tout ?? null,
       costNanos: u?.costNanos ?? null,
@@ -319,7 +345,7 @@ export default function Playground() {
     stickRef.current = true
     // Every column is live from t=0 (empty text until the first chunk), so a
     // slow TTFT never flashes the "not run" note.
-    setLive(Object.fromEntries(slots.map((_, i) => [i, { text: '', request: reqs[i]! }])))
+    setLive(Object.fromEntries(slots.map((_, i) => [i, { text: '', reasoning: '', request: reqs[i]! }])))
     pendingRef.current = slots.length
     // One request per column, in parallel, each with its own AbortController.
     slots.forEach((_, i) => {
@@ -475,6 +501,7 @@ export default function Playground() {
         </div>
         {streaming ? (
           <div className="whitespace-pre-wrap break-words text-[13px]">
+            {lv.reasoning && <Thinking text={lv.reasoning} live={!lv.text} />}
             {lv.text}
             <span aria-hidden className="ml-0.5 inline-block h-3.5 w-[2px] animate-pulse bg-foreground align-[-2px]" />
           </div>
@@ -484,6 +511,7 @@ export default function Playground() {
           <ErrorText>{r.error}</ErrorText>
         ) : (
           <div>
+            {r.reasoning && <Thinking text={r.reasoning} live={false} />}
             <div className="whitespace-pre-wrap break-words text-[13px]">{r.text || <span className="text-muted-foreground">(empty response)</span>}</div>
             <div className="mt-1.5 font-mono text-[11px] text-muted-foreground">{replyMeta(r)}</div>
           </div>

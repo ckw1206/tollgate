@@ -213,6 +213,7 @@ export interface GateInfo {
 export interface Reply {
   model: string
   text: string
+  reasoning?: string // a reasoning model's thinking, shown collapsed; never replayed
   tin: number | null
   tout: number | null
   costNanos: number | null

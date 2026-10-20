@@ -10,6 +10,7 @@ import {
   curlFor,
   forSave,
   isSendKey,
+  reasoningOf,
   randomName,
   rawResponseBody,
   reseedSession,
@@ -473,5 +474,14 @@ describe('isSendKey', () => {
     expect(isSendKey({ key: 'Enter', shiftKey: false, isComposing: true })).toBe(false)
     expect(isSendKey({ key: 'Enter', shiftKey: false, keyCode: 229 })).toBe(false)
     expect(isSendKey({ key: 'a', shiftKey: false })).toBe(false)
+  })
+})
+
+describe('reasoningOf', () => {
+  it('reads reasoning_content or reasoning, else empty', () => {
+    expect(reasoningOf({ reasoning_content: 'a' })).toBe('a')
+    expect(reasoningOf({ reasoning: 'b' })).toBe('b')
+    expect(reasoningOf({ reasoning: null })).toBe('')
+    expect(reasoningOf(undefined)).toBe('')
   })
 })
