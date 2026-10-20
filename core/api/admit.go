@@ -17,8 +17,14 @@ type scope struct {
 	limits   repo.Limits
 }
 
+// scopes returns the limits to enforce, tightest first. A key-less
+// (playground) principal has no key scope: only its group's budget, RPM and TPM.
 func scopes(info *repo.AuthInfo) []scope {
-	return []scope{{"key", info.Key.ID, info.Key.Limits}, {"group", info.Group.ID, info.Group.Limits}}
+	var out []scope
+	if info.Key.ID != "" {
+		out = append(out, scope{"key", info.Key.ID, info.Key.Limits})
+	}
+	return append(out, scope{"group", info.Group.ID, info.Group.Limits})
 }
 
 // modelAllowed: the owner may use it (group or extra grant), and the key narrows from there.

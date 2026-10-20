@@ -244,7 +244,8 @@ func TestModels_NonWritersSeeEffectiveSet(t *testing.T) {
 		t.Fatalf("viewer: %v", got)
 	}
 	w := e.as("admin@x.io", "GET", "/console/api/v1/models", nil)
-	if b := w.Body.String(); len(decodeInto[[]repo.Model](t, w)) != 3 || strings.Contains(b, `"access"`) || !strings.Contains(b, "corp.example.com") {
+	// 3 here plus the 3 models the test env seeds for the playground (fast, slow, off).
+	if b := w.Body.String(); len(decodeInto[[]repo.Model](t, w)) != 6 || strings.Contains(b, `"access"`) || !strings.Contains(b, "corp.example.com") {
 		t.Fatalf("admin: %s", b)
 	}
 }

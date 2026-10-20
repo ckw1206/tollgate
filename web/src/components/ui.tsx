@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { Link, matchPath, useLocation } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth'
+import { sparkPoints } from '../sparkline'
 import { applyState, groupByProvider, initialPickerState, triggerSummary, type PickerMode, type PickerModel } from './modelPicker'
 
 // Every page composes these; no page-local buttons, inputs, tables or modals.
@@ -40,12 +41,19 @@ export function Button({ variant = 'primary', size = 'md', className = '', ...pr
   )
 }
 
-// Banner: a dismissible success notice at the top of a page.
-export function Banner({ children, onDismiss }: { children: ReactNode; onDismiss: () => void }) {
+// Banner: a notice at the top of a page. Tones: success (default), warning
+// (role status) and error (role alert); dismissible only when onDismiss is
+// given (no × otherwise).
+export function Banner({ children, tone = 'success', onDismiss }: { children: ReactNode; tone?: 'success' | 'warning' | 'error'; onDismiss?: () => void }) {
+  const tones = {
+    success: 'bg-success text-success-foreground',
+    warning: 'bg-warning text-warning-foreground',
+    error: 'bg-error text-error-foreground',
+  }
   return (
-    <div role="status" className="flex items-center justify-between gap-4 bg-success px-3.5 py-2.5 text-sm text-success-foreground">
+    <div role={tone === 'error' ? 'alert' : 'status'} className={`flex items-center justify-between gap-4 px-3.5 py-2.5 text-sm ${tones[tone]}`}>
       <span>{children}</span>
-      <button type="button" aria-label="Dismiss" onClick={onDismiss} className="px-1 text-base leading-none hover:opacity-70">×</button>
+      {onDismiss && <button type="button" aria-label="Dismiss" onClick={onDismiss} className="px-1 text-base leading-none hover:opacity-70">×</button>}
     </div>
   )
 }
@@ -183,7 +191,7 @@ export function Table<T>({ rows, cols, empty = 'Nothing here yet.', expand, rowK
   return (
     <div ref={wrapRef} className="overflow-x-auto rounded-md border border-border">
       <table className="min-w-full text-sm">
-        <thead className="bg-table-header text-left text-[13px] text-muted-foreground">
+        <thead className="bg-table-header text-left font-mono text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
           <tr className="h-10">
             {expand && <th className="w-10" aria-label="Expand" />}
             {cols.map((c, i) => (
@@ -276,6 +284,20 @@ export function DetailPanel({ items, actions }: { items: DetailItem[]; actions?:
 
 export function Skeleton({ className = 'h-3 w-24' }: { className?: string }) {
   return <span aria-hidden className={`block animate-pulse rounded-sm bg-muted ${className}`} />
+}
+
+// Sparkline: a 100×24 SVG trend for a stat card (geometry in ../sparkline.ts).
+export function Sparkline({ points, tone }: { points: number[]; tone: 'primary' | 'muted' }) {
+  const stroke = tone === 'primary' ? 'var(--primary)' : 'var(--muted-foreground)'
+  const W = 100
+  const H = 24
+  const pts = sparkPoints(points, W, H)
+  if (!pts) return null
+  return (
+    <svg aria-hidden width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="shrink-0">
+      <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
 }
 
 // RowActions: the last, unlabeled, right-aligned column. Small buttons, 8px apart.

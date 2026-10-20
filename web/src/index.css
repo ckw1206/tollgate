@@ -37,7 +37,9 @@
   --font-sans: 'Geist', sans-serif;
   --font-mono: 'Geist Mono', monospace;
   --shadow-dialog: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
-  --shadow-landing-card: 0 10px 30px -10px rgba(40, 48, 30, 0.2);
+  /* Auth card: a 6px ring in the page colour cuts the grid lines behind the card, under a
+     deep soft shadow (per the "Tollgate Sign In" mock, derived from tokens). */
+  --shadow-landing-card: 0 0 0 6px var(--background), 0 30px 60px -20px color-mix(in srgb, var(--background) 80%, transparent);
 }
 
 /* Mira's light tokens are tuned for dark surfaces (near-white primary, translucent-white
@@ -77,20 +79,25 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Landing (/welcome): always light Mira over the illustrated backdrop. Sign in, setup and
-   invite (/login, /setup, /invite) use the plain base colour. */
-.landing-bg,
-.auth-bg {
-  background-color: #eceee6;
-}
-.landing-bg {
-  background-image: url('/landing-bg.webp');
-  background-size: cover;
-  background-position: center bottom;
-  background-repeat: no-repeat;
+/* Landing and auth pages (/welcome, /login, /setup, /invite): always dark Mira. The
+   toll-lane grid (lib/tollgateGrid.ts) renders into a non-interactive canvas sized to the
+   shell, sitting under the shells' relative content blocks. */
+.tg-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
 }
 
-html.landing-boot,
-html.landing-boot body {
-  background: #eceee6;
+/* Pre-paint base for the always-dark landing/auth pages. The dark token values only exist
+   under [data-mode='dark'], and the saved console theme can still be light on <html> until
+   a shell mounts and forces dark — so the two tokens these pages paint with are pinned to
+   their dark values here (they must be literal: var(--background) would resolve to the
+   light value until then), rather than hardcoding colours on the element. */
+html.landing-boot {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  color-scheme: dark;
 }

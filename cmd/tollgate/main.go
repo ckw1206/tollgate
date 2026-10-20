@@ -148,9 +148,12 @@ func serve() error {
 	})
 
 	mux := http.NewServeMux()
-	(&api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}).Register(mux)
+	// One gateway server for /v1 and the console's playground: the playground
+	// presents a key-less principal to the same ChatAs path the keys use.
+	gateway := &api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}
+	gateway.Register(mux)
 	(&consoleapi.Server{Store: store, Cache: c, Vault: v, Reload: reload, BaseURL: cfg.BaseURL, TrustedProxies: cfg.TrustedProxies,
-		Version: version, Commit: commit, Setup: setup,
+		Version: version, Commit: commit, Setup: setup, Gateway: gateway,
 		Sessions: &auth.Sessions{Cache: c, Store: store, Insecure: cfg.CookieInsecure, TTL: 24 * time.Hour}}).Register(mux)
 	mux.Handle("GET /", web.Handler(web.Dist())) // console SPA; API routes above take precedence
 

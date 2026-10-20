@@ -14,7 +14,13 @@ import (
 )
 
 func (s *Server) chat(w http.ResponseWriter, r *http.Request) {
-	info := authFrom(r.Context())
+	s.ChatAs(w, r, authFrom(r.Context()))
+}
+
+// ChatAs runs the chat path for an authenticated principal: a key, or a
+// key-less one (playground session) whose limits and model access come from
+// the user's group only.
+func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthInfo) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	if err != nil {
 		WriteError(w, 413, "invalid_request_error", "request_too_large", "request body too large")
@@ -152,7 +158,11 @@ func writeUpstreamError(w http.ResponseWriter, err error) int {
 }
 
 func newRecord(info *repo.AuthInfo, m *llm.Model, start time.Time) repo.SpendRecord {
-	return repo.SpendRecord{KeyID: info.Key.ID, UserID: info.Key.UserID, GroupID: info.Key.GroupID,
+	source := "api"
+	if info.Key.ID == "" { // key-less (playground) principals bill the group only
+		source = "playground"
+	}
+	return repo.SpendRecord{KeyID: info.Key.ID, Source: source, UserID: info.Key.UserID, GroupID: info.Key.GroupID,
 		ModelID: m.ID, ModelName: m.Name, Provider: m.Provider, Status: "success", HTTPStatus: 200, CreatedAt: start}
 }
 

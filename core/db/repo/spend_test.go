@@ -103,6 +103,106 @@ func TestRecordSpend_TotalBudgetUnaffected(t *testing.T) {
 	}
 }
 
+func TestRecordSpend_KeylessPlaygroundRow(t *testing.T) {
+	f := newFixture(t, "unlimited")
+	ctx := context.Background()
+	now := time.Now()
+	pg := f.rec(5000, now)
+	pg.KeyID, pg.Source = "", "playground"
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{pg, f.rec(7000, now)}); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := f.s.GetGroup(ctx, f.g.ID)
+	if g.SpendNanos != 12000 {
+		t.Fatalf("group spend_nanos=%d, want 12000 (keyless rows still charge the group)", g.SpendNanos)
+	}
+	k, _ := f.s.GetKey(ctx, f.k.ID)
+	if k.SpendNanos != 7000 {
+		t.Fatalf("key spend_nanos=%d, want 7000 (a keyless row must not charge a key)", k.SpendNanos)
+	}
+	n, err := f.s.QueryForTest(ctx, `SELECT count(*) FROM spend_logs WHERE key_id IS NULL AND source = 'playground'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := n.(int64); c != 1 {
+		t.Fatalf("keyless playground rows = %d, want 1", c)
+	}
+	n, err = f.s.QueryForTest(ctx, `SELECT count(*) FROM spend_logs WHERE key_id = $1 AND source = 'api'`, f.k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := n.(int64); c != 1 {
+		t.Fatalf("keyed api-source rows = %d, want 1 (default source must be 'api')", c)
+	}
+}
+
+func TestRecentSpend_IncludesPlayground(t *testing.T) {
+	f := newFixture(t, "unlimited")
+	ctx := context.Background()
+	now := time.Now()
+	pg := f.rec(5000, now)
+	pg.KeyID, pg.Source = "", "playground"
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(7000, now), pg}); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := f.s.RecentSpend(ctx, repo.SpendFilter{From: now.Add(-time.Hour), To: now.Add(time.Hour)}, 10)
+	if err != nil || len(logs) != 2 {
+		t.Fatalf("logs=%+v err=%v, want 2 rows", logs, err)
+	}
+	var pgFound, apiFound bool
+	for _, l := range logs {
+		switch l.Source {
+		case "playground":
+			pgFound = true
+			if l.KeyID != "" || l.KeyAlias != "Playground" || l.KeyPrefix != "session" || l.OwnerEmail != f.u.Email {
+				t.Fatalf("playground row = %+v, want keyless Playground/session row owned by %s", l, f.u.Email)
+			}
+		case "api":
+			apiFound = true
+			if l.KeyID != f.k.ID || l.KeyAlias != "k" {
+				t.Fatalf("api row = %+v, want the fixture key's alias", l)
+			}
+		default:
+			t.Fatalf("row with missing source: %+v", l)
+		}
+	}
+	if !pgFound || !apiFound {
+		t.Fatalf("pgFound=%v apiFound=%v, want both", pgFound, apiFound)
+	}
+}
+
+func TestQuerySpend_KeyBucketCoalescesPlayground(t *testing.T) {
+	f := newFixture(t, "unlimited")
+	ctx := context.Background()
+	now := time.Now()
+	pg := f.rec(5000, now)
+	pg.KeyID, pg.Source = "", "playground"
+	if _, err := f.s.RecordSpend(ctx, []repo.SpendRecord{f.rec(7000, now), pg}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := f.s.QuerySpend(ctx, repo.SpendFilter{From: now.Add(-time.Hour), To: now.Add(time.Hour), GroupBy: "key"})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows=%+v err=%v, want 2 key buckets", rows, err)
+	}
+	var pgBucket, keyBucket *repo.SpendRow
+	for i := range rows {
+		switch rows[i].Bucket {
+		case "playground":
+			pgBucket = &rows[i]
+		case f.k.ID:
+			keyBucket = &rows[i]
+		default:
+			t.Fatalf("unexpected bucket %q", rows[i].Bucket)
+		}
+	}
+	if pgBucket == nil || keyBucket == nil {
+		t.Fatalf("buckets = %+v, want one 'playground' and one keyed", rows)
+	}
+	if pgBucket.Requests != 1 || pgBucket.CostNanos != 5000 {
+		t.Fatalf("playground bucket = %+v, want 1 request / 5000 nanos", pgBucket)
+	}
+}
+
 func TestQuerySpend_ModelDayInServerTimezone(t *testing.T) {
 	f := newFixture(t, "unlimited")
 	ctx := context.Background()
