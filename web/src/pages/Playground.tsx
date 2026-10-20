@@ -182,6 +182,16 @@ export default function Playground() {
     return () => window.removeEventListener('resize', fit)
   }, [models.error, list.error, loadError])
 
+  // The composer starts one line tall (same 36px as Send) and grows with its
+  // content up to max-h-48, then scrolls; it shrinks back when a send clears it.
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight + 2}px` // + the 1px top/bottom border
+  }, [prompt])
+
   // Follow new output unless the user has scrolled up to read.
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
@@ -799,9 +809,10 @@ export default function Playground() {
             )}
             <div className="flex items-end gap-2">
               <textarea
-                rows={2}
+                ref={composerRef}
+                rows={1}
                 aria-label="Message"
-                className={controlCls + ' max-h-48 w-full resize-y text-sm'}
+                className={controlCls + ' block max-h-48 min-h-9 w-full resize-none py-2 text-sm leading-5'}
                 placeholder={placeholder}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -813,7 +824,7 @@ export default function Playground() {
                 }}
                 disabled={pendingId !== null}
               />
-              <Button onClick={send} disabled={!canSend}>
+              <Button className="shrink-0" onClick={send} disabled={!canSend}>
                 {running ? 'Running…' : 'Send'}
               </Button>
             </div>
