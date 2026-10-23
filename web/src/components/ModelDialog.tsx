@@ -120,7 +120,7 @@ export default function ModelDialog({ model, creds, onClose, onSaved }: {
           <Field label="Output $ / 1M"><input className={inputCls} type="number" min="0" step="any" required value={form.price_out} onChange={set('price_out')} /></Field>
           <Field label="Cache read $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cr} onChange={set('price_cr')} /></Field>
           <Field label="Cache write $ / 1M" hint="Blank = input price"><input className={inputCls} type="number" min="0" step="any" value={form.price_cw} onChange={set('price_cw')} /></Field>
-          <Field label="Context window (tokens)" hint="Blank = not set"><input className={inputCls} type="number" min="1" step="1" value={form.context_window} onChange={set('context_window')} /></Field>
+          <Field label="Context window (tokens)" hint="Blank = not set. Checked against the upstream's reported limit; a larger value is rejected."><input className={inputCls} type="number" min="1" step="1" value={form.context_window} onChange={set('context_window')} /></Field>
         </div>
         <Field label="Extra (JSON)" hint='e.g. {"headers":{"X-Org":"me"}}. vertex_project / vertex_location override the credential.'>
           <textarea className={controlCls + ' mt-1 block h-24 w-full py-1 font-mono text-xs'} value={form.extra} onChange={set('extra')} />
