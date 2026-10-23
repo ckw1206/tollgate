@@ -132,8 +132,11 @@ func TestModels_ContextWindowAllowed(t *testing.T) {
 		"non-JSON body":        {body: `<html>nope</html>`, status: 200, cw: ptr(int64(1000000)), wantCalls: 1},
 		"upstream unreachable": {cw: ptr(int64(1000000)), apiBase: deadURL + "/v1", wantCalls: 0},
 	} {
+		// One environment for the whole table: every case below only creates a model, and
+		// buildTenv costs three bcrypt hashes per call. Rebuilding it per subtest added ~9
+		// seconds of pure hashing under -race for no isolation this table needs.
+		e := newTenv(t)
 		t.Run(name, func(t *testing.T) {
-			e := newTenv(t)
 			base, upstream := tc.apiBase, tc.upstream
 			if upstream == "" {
 				upstream = "m"
@@ -143,7 +146,9 @@ func TestModels_ContextWindowAllowed(t *testing.T) {
 				up, h := countingUpstream(t, tc.body, tc.status)
 				hits, base = h, up.URL+"/v1"
 			}
-			w := e.as("admin@x.io", "POST", "/console/api/v1/models", modelBody("m", upstream, base, tc.cw))
+			// The table shares one environment, so each case needs its own model name.
+			name := "m-" + strings.ReplaceAll(name, " ", "-")
+			w := e.as("admin@x.io", "POST", "/console/api/v1/models", modelBody(name, upstream, base, tc.cw))
 			if w.Code != 201 {
 				t.Fatalf("%d %s, want 201 (fail open)", w.Code, w.Body)
 			}
