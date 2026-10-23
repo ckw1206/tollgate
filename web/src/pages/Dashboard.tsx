@@ -180,7 +180,7 @@ function Trend({ top, total, metric, rows, buckets, granularity }: { top: SpendR
             <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 3" />
             <XAxis dataKey="bucket" hide />
             <YAxis hide domain={[0, ceil]} ticks={[0, 1, 2, 3].map((i) => (ceil * i) / 3)} />
-            <Tooltip formatter={(v: number) => showMetric(v, metric)} labelFormatter={(b) => fmtBucket(String(b), granularity)} contentStyle={tooltipStyle} />
+            <Tooltip formatter={(v) => showMetric(Number(v ?? 0), metric)} labelFormatter={(b) => fmtBucket(String(b), granularity)} contentStyle={tooltipStyle} />
             {top.map((m, i) => (
               <Line
                 key={m.bucket}
@@ -383,7 +383,7 @@ export default function Dashboard() {
                   <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
                   <XAxis dataKey="bucket" tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" tickFormatter={(b) => fmtBucket(String(b), span.granularity)} minTickGap={24} />
                   <YAxis tick={{ fill: 'var(--muted-foreground)', fontSize: 12 }} stroke="var(--border)" width={56} />
-                  <Tooltip formatter={(v: number) => usd(Math.round(v * 1e9))} labelFormatter={(b) => fmtBucket(String(b), span.granularity)} contentStyle={tooltipStyle} />
+                  <Tooltip formatter={(v) => usd(Math.round(Number(v ?? 0) * 1e9))} labelFormatter={(b) => fmtBucket(String(b), span.granularity)} contentStyle={tooltipStyle} />
                   {/* A single-bucket range (e.g. a one-day custom) is one point: give it a dot. */}
                   <Area type="monotone" dataKey="usd" stroke="var(--primary)" fill="var(--primary)" fillOpacity={0.14} strokeWidth={2} dot={chart.length === 1 ? { r: 3, fill: 'var(--primary)' } : false} />
                 </AreaChart>
