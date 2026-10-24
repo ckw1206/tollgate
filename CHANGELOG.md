@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.1](https://github.com/ckw1206/tollgate/compare/v0.3.0...v0.3.1) (2026-10-24)
+
+
+### Fixes
+
+* **console:** verify model context_window against the upstream limit ([cb015af](https://github.com/ckw1206/tollgate/commit/cb015af127c57c6aa7c936dddeca671ebceb306c))
+* **console:** verify model context_window against the upstream limit ([804141f](https://github.com/ckw1206/tollgate/commit/804141f939cd15ee6622983a0c55279c3d3c1acd))
+* **web:** make the npm group bump type-check under TS 7 and Recharts 3 ([c9d6bfe](https://github.com/ckw1206/tollgate/commit/c9d6bfecfdf3d9ee614161893f9fe314b15ee9c9))
+
+
+### Dependencies
+
+* **deps:** bump docker/build-push-action from 6 to 7 ([1613522](https://github.com/ckw1206/tollgate/commit/161352273d4ce3b934f54c58407ce11a65724712))
+* **deps:** bump docker/build-push-action from 6 to 7 ([13bb581](https://github.com/ckw1206/tollgate/commit/13bb5815fa66db50157456f75e425defe9151891))
+* **deps:** bump the npm group in /web with 9 updates ([3200b8e](https://github.com/ckw1206/tollgate/commit/3200b8e476630771a48e131af2ae0601d3559448))
+* **deps:** bump the npm group in /web with 9 updates ([4d52b54](https://github.com/ckw1206/tollgate/commit/4d52b5447fa757340f240fea4099abcdc8c2778f))
+
 ## [0.3.0](https://github.com/ckw1206/tollgate/compare/v0.2.0...v0.3.0) (2026-10-19)
 
 
