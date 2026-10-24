@@ -20,17 +20,25 @@ import (
 // (nano-USD) and a TPM (tokens) reservation live in ONE hash per scope, so
 // settling is a single round trip and the two can't drift apart.
 //
-// The TTL is the leak guard: a crash between reserve and settle must not pin a
-// scope's budget forever. It is deliberately generous — a reservation must
-// outlive the longest possible request, or a still-running request would lose
-// its reservation and admit a second one. upstreamTimeout (10m) bounds every
-// upstream call, so 30m has headroom.
+// The TTL is a leak guard, not a reaper. A crash between reserve and settle
+// must not pin a scope's budget forever, so every write refreshes a 30m expiry.
+// It is deliberately generous — a reservation must outlive the longest possible
+// request, or a still-running request would lose its reservation and admit a
+// second one. upstreamTimeout (10m) bounds every upstream call, so 30m has
+// headroom.
 //
-// Each key carries the TTL of the request that WROTE it, refreshed on every
-// write. A leaked amount therefore cannot outlive its own write by more than
-// this window, though on a scope with steady traffic each new request re-arms
-// the key — which is why the TTL is a backstop for a stopped scope rather than
-// a precise reaper. Values are reconciled to zero by normal settle/release.
+// The TTL cannot be tightened into a precise reaper for a busy scope, because
+// the key is shared: EXPIRE must be refreshed on every write or a scope under
+// steady traffic would drop its LIVE reservations mid-flight, which is far
+// worse than a stale one. Measured: a leaked amount on an active scope is
+// re-armed from 25m back to 30m by unrelated traffic. So a crash strands that
+// request's estimate for as long as the scope stays busy, and it is only
+// reclaimed once traffic stops.
+//
+// The blast radius is one estimate per crashed in-flight request (or the real
+// cost if the crash happened after settle), never the scope's whole budget —
+// the counter is a sum, and healthy requests settle normally. A Redis restart
+// clears it outright, since nothing here is persisted.
 const reserveTTL = 30 * time.Minute
 
 // reserveKey is NOT window-scoped like rpmKey/tpmKey: a reservation spans
