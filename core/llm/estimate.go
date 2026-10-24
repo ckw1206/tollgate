@@ -1,0 +1,87 @@
+package llm
+
+// Estimating the cost and token footprint of a request before it runs (#23, #28).
+//
+// The estimate exists only to reserve against a cap while a request is in
+// flight. It is replaced by exact usage in finish(), so it must be an UPPER
+// bound on what the request can plausibly consume — an underestimate reopens
+// the overshoot it is meant to close.
+
+// defaultOutputTokens is used when a request sets no max_tokens: the client has
+// made no commitment about output length, so the reservation assumes a typical
+// completion rather than the worst case.
+//
+// This is deliberately NOT the model's context_window. Reserving the whole
+// context as output costs ~$1.28 on a 128k model at typical prices, which
+// denies almost every request against a realistic cap — an over-reservation
+// that rejects legitimate traffic is its own outage. The context window is a
+// hard ceiling on what a model CAN emit, not a statement about what a request
+// WILL emit.
+//
+// The residual risk is bounded and acceptable: a request that omits max_tokens
+// and then generates an unusually long completion can overrun its reservation
+// by at most (actual - default) tokens. Callers who need a hard guarantee set
+// max_tokens, which is exactly the signal the reservation respects.
+const defaultOutputTokens = 1024
+
+// EstimateOutputTokens is the output bound reserved for a request: the client's
+// max_tokens when set, else defaultOutputTokens.
+//
+// A client that sets max_tokens gets an exact reservation. That is the
+// intended way to make the cap bite precisely.
+func EstimateOutputTokens(req *ChatRequest, m *Model) int64 {
+	if req != nil && req.MaxTokens != nil && *req.MaxTokens > 0 {
+		return int64(*req.MaxTokens)
+	}
+	// A model whose whole context is smaller than the default cannot emit the
+	// default; clamping keeps the estimate physically achievable.
+	if m != nil && m.ContextWindow > 0 && m.ContextWindow < defaultOutputTokens {
+		return m.ContextWindow
+	}
+	return defaultOutputTokens
+}
+
+// EstimateInputTokens approximates the prompt size without a tokenizer, which
+// the gateway does not have (providers tokenize upstream, per provider).
+//
+// ~4 bytes per token is the standard English heuristic. It is an approximation
+// in both directions, so the output bound above is what makes the total an
+// upper bound in practice; this term is deliberately not inflated, since
+// over-counting input on a large context would deny most requests outright.
+func EstimateInputTokens(req *ChatRequest) int64 {
+	if req == nil {
+		return 0
+	}
+	var bytes int64
+	for _, msg := range req.Messages {
+		for _, part := range msg.Parts {
+			bytes += int64(len(part.Text))
+		}
+		// Per-message framing overhead (role, separators) that carries no text.
+		bytes += 4
+	}
+	return bytes/4 + 1
+}
+
+// Estimate is the reservation to take for a chat request: cost in nano-USD
+// (integers throughout, per CLAUDE.md) and total tokens for TPM.
+func Estimate(req *ChatRequest, m *Model) (costNanos, tokens int64) {
+	if m == nil {
+		return 0, 0
+	}
+	in := EstimateInputTokens(req)
+	out := EstimateOutputTokens(req, m)
+	u := Usage{Input: in, Output: out}
+	return Cost(u, m.Prices), u.Tokens()
+}
+
+// EstimateEmbedding is the reservation for an embeddings request: embeddings
+// take no max_tokens and return no completion, so only the input is reserved.
+// Reserving an output bound here would refuse requests that can never cost it.
+func EstimateEmbedding(bodyLen int, m *Model) (costNanos, tokens int64) {
+	if m == nil {
+		return 0, 0
+	}
+	u := Usage{Input: int64(bodyLen)/4 + 1}
+	return Cost(u, m.Prices), u.Tokens()
+}

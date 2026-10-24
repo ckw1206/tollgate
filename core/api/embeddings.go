@@ -34,9 +34,20 @@ func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, 403, "permission_error", "model_not_allowed", fmt.Sprintf("model %q isn't allowed for this key, its owner or the owner's group", m.Name))
 		return
 	}
-	if !s.admit(w, r, info) {
+	// Embeddings produce no output and take no max_tokens: the whole cost is
+	// the input, sized by the provider from the body.
+	resv, ok := s.admit(w, r, info, func() (int64, int64) { return llm.EstimateEmbedding(len(body), m) })
+	if !ok {
 		return
 	}
+	// Every exit from here must settle or release: an abandoned reservation
+	// pins the scope's budget until its TTL expires.
+	settled := false
+	defer func() {
+		if !settled {
+			resv.release(s.Cache, context.Background())
+		}
+	}()
 	start := s.Now()
 	rec := newRecord(info, m, start)
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), upstreamTimeout)
@@ -44,7 +55,7 @@ func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
 	res, err := p.Embed(ctx, m, body)
 	if errors.Is(err, llm.ErrBadRequest) {
 		WriteError(w, 400, "invalid_request_error", "unsupported", err.Error())
-		return
+		return // never reached upstream; the deferred release frees the estimate
 	}
 	var u llm.Usage
 	if err != nil {
@@ -58,5 +69,6 @@ func (s *Server) embeddings(w http.ResponseWriter, r *http.Request) {
 		w.Write(res.Body)
 	}
 	fill(&rec, u, m, s.Now().Sub(start))
-	s.finish(info, rec, u)
+	settled = true
+	s.finish(info, resv, rec, u)
 }

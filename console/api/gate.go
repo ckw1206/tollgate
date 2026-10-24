@@ -41,11 +41,16 @@ func (s *Server) gate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if g.BudgetType != "unlimited" {
+		// reserved_nanos is in-flight plus settled-but-uncommitted cost (#23):
+		// money already committed against the cap that spend_nanos does not yet
+		// show. Displaying spend without it makes the bar understate usage.
+		reserved, _, _ := s.Cache.Held(r.Context(), "group", g.ID)
 		resp["budget"] = map[string]any{
-			"type":         g.BudgetType,
-			"budget_nanos": g.BudgetNanos,
-			"spend_nanos":  g.EffectiveSpend(time.Now()),
-			"reset_at":     g.BudgetResetAt,
+			"type":           g.BudgetType,
+			"budget_nanos":   g.BudgetNanos,
+			"spend_nanos":    g.EffectiveSpend(time.Now()),
+			"reserved_nanos": reserved,
+			"reset_at":       g.BudgetResetAt,
 		}
 	}
 	api.WriteJSON(w, 200, resp)

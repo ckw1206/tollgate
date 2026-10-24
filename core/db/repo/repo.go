@@ -40,6 +40,14 @@ type Limits struct {
 	BudgetResetAt *time.Time `json:"budget_reset_at"`
 	RPMLimit      *int32     `json:"rpm_limit"`
 	TPMLimit      *int32     `json:"tpm_limit"`
+
+	// ReservedNanos is committed against the cap but not yet in SpendNanos:
+	// requests currently in flight plus cost settled but not yet flushed to
+	// spend_logs (#23). It lives in Redis, not Postgres, so it is NOT part of
+	// the row and must be populated by the caller after the read — every
+	// column list leaves it zero, which is the correct default for any code
+	// path that does not consult Redis.
+	ReservedNanos int64 `json:"reserved_nanos"`
 }
 
 // EffectiveSpend reports the spend that counts toward the cap as of now.

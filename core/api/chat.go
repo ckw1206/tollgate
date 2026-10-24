@@ -40,9 +40,18 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 		WriteError(w, 403, "permission_error", "model_not_allowed", fmt.Sprintf("model %q isn't allowed for this key, its owner or the owner's group", m.Name))
 		return
 	}
-	if !s.admit(w, r, info) {
+	resv, ok := s.admit(w, r, info, func() (int64, int64) { return llm.Estimate(req, m) })
+	if !ok {
 		return
 	}
+	// From here every exit must settle or release the reservation: an
+	// abandoned reservation pins the scope's budget until its TTL expires.
+	settled := false
+	defer func() {
+		if !settled {
+			resv.release(s.Cache, context.Background())
+		}
+	}()
 
 	start := s.Now()
 	rec := newRecord(info, m, start)
@@ -66,7 +75,7 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 		if !req.Stream || !streamStarted(w) {
 			WriteError(w, 400, "invalid_request_error", "unsupported", err.Error())
 		}
-		return // never reached upstream; nothing to bill
+		return // never reached upstream; nothing to bill. The deferred release frees the estimate.
 	}
 	fill(&rec, u, m, s.Now().Sub(start))
 	if err != nil {
@@ -76,7 +85,8 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 			rec.HTTPStatus = writeUpstreamError(w, err)
 		}
 	}
-	s.finish(info, rec, u)
+	settled = true
+	s.finish(info, resv, rec, u)
 }
 
 // stream proxies SSE. If the client goes away, it stops writing but lets the

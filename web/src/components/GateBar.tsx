@@ -55,8 +55,12 @@ const meterColor = (pct: number) => (pct >= 100 ? 'var(--destructive)' : pct >= 
 export default function GateBar() {
   const { health, gate } = useGate()
   const b = gate?.budget ?? null
+  // In-flight requests already count against the cap but are not in
+  // spend_nanos yet, so the meter includes them (#23) — otherwise it reads
+  // lower than what the gateway will actually enforce.
+  const used = b ? b.spend_nanos + (b.reserved_nanos ?? 0) : 0
   // A budget with budget_nanos <= 0 is treated as reached: 100%, destructive.
-  const pct = b ? (b.budget_nanos > 0 ? Math.min((b.spend_nanos / b.budget_nanos) * 100, 100) : 100) : 0
+  const pct = b ? (b.budget_nanos > 0 ? Math.min((used / b.budget_nanos) * 100, 100) : 100) : 0
   // Below 768px only the budget meter shows; with no budget there is nothing
   // left on a narrow screen, so the whole bar hides there.
   return (
@@ -76,7 +80,7 @@ export default function GateBar() {
         {b && (
           <span className="ml-auto flex items-center gap-2">
             <span className="hidden md:inline">
-              {b.type === 'daily' ? 'Your budget today' : 'Your budget'} {usd(b.spend_nanos)} / {usd(b.budget_nanos)}
+              {b.type === 'daily' ? 'Your budget today' : 'Your budget'} {usd(used)} / {usd(b.budget_nanos)}
             </span>
             <span aria-hidden className="h-1 overflow-hidden rounded-sm bg-muted" style={{ width: 64 }}>
               <span className="block h-full" style={{ width: `${pct}%`, background: meterColor(pct) }} />
