@@ -2,7 +2,6 @@ package cache
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -24,7 +23,14 @@ import (
 // The TTL is the leak guard: a crash between reserve and settle must not pin a
 // scope's budget forever. It is deliberately generous — a reservation must
 // outlive the longest possible request, or a still-running request would lose
-// its reservation and admit a second one.
+// its reservation and admit a second one. upstreamTimeout (10m) bounds every
+// upstream call, so 30m has headroom.
+//
+// Each key carries the TTL of the request that WROTE it, refreshed on every
+// write. A leaked amount therefore cannot outlive its own write by more than
+// this window, though on a scope with steady traffic each new request re-arms
+// the key — which is why the TTL is a backstop for a stopped scope rather than
+// a precise reaper. Values are reconciled to zero by normal settle/release.
 const reserveTTL = 30 * time.Minute
 
 // reserveKey is NOT window-scoped like rpmKey/tpmKey: a reservation spans
@@ -41,8 +47,14 @@ const (
 )
 
 // Reserve atomically adds an estimate to a scope's in-flight reservation and
-// returns the totals that count against the cap: the new in-flight reservation
-// PLUS any settled-but-not-yet-committed cost (see Settle).
+// returns the amount that was already reserved BEFORE this call, excluding the
+// estimate just added.
+//
+// Returning the prior total (not the post-increment one) is deliberate: the
+// caller must compare `committed + prior + thisEstimate` against the cap, and a
+// self-inclusive return invites charging this request twice. An earlier version
+// returned the inclusive total and the caller added its estimate again, making
+// capacity floor(cap/estimate)-1 instead of floor(cap/estimate).
 //
 // Atomicity matters: reading the counter and deciding in the caller would
 // reintroduce exactly the check-then-act race this exists to close. HINCRBY is
@@ -50,20 +62,15 @@ const (
 func (c *Cache) Reserve(ctx context.Context, scope, id string, costNanos, tokens int64) (cost, tpm int64, err error) {
 	k := reserveKey(scope, id)
 	pipe := c.rdb.TxPipeline()
+	// HINCRBY returns the post-increment value; subtract this call's own
+	// contribution to report the prior total.
 	costCmd := pipe.HIncrBy(ctx, k, reserveCostField, costNanos)
 	tpmCmd := pipe.HIncrBy(ctx, k, reserveTPMField, tokens)
 	pipe.Expire(ctx, k, reserveTTL)
-	pendingCmd := pipe.Get(ctx, k+":pending")
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, 0, err
 	}
-	cost = costCmd.Val()
-	if pv, perr := pendingCmd.Result(); perr == nil {
-		cost += hashInt(pv)
-	} else if !errors.Is(perr, redis.Nil) {
-		return 0, 0, perr
-	}
-	return cost, tpmCmd.Val(), nil
+	return costCmd.Val() - costNanos, tpmCmd.Val() - tokens, nil
 }
 
 // Release drops a reservation. Amounts are subtracted rather than the key being
@@ -84,36 +91,37 @@ func (c *Cache) Release(ctx context.Context, scope, id string, costNanos, tokens
 	return err
 }
 
-// Settle converts a finished request's in-flight reservation into a short-lived
-// "pending commit" hold.
+// Settle removes a finished request's in-flight reservation.
 //
-// The gap this closes: spend is committed to Postgres by an async recorder that
-// flushes every 2s (spend.Recorder.FlushEvery), so between finish() and the
-// commit a request's cost is visible to neither the reservation nor
-// spend_nanos. Releasing outright would reopen a (much smaller) version of the
-// overshoot this mechanism prevents.
+// The reservation is released outright rather than converted into a
+// settled-but-uncommitted "hold". An earlier version kept the actual cost
+// counting against the cap until the async recorder committed it (or a TTL
+// expired), to bridge the recorder's 2s flush interval. That was removed
+// because it cannot be made correct without a completion signal from the
+// recorder (Record is fire-and-forget, so nothing can tell Redis the commit
+// landed), and the error it introduced was worse than the one it fixed:
 //
-// The in-flight estimate is removed ENTIRELY and the actual cost takes its
-// place under a separate key with its own TTL. The two live on different clocks
-// on purpose: in-flight must not outlive a request, while the pending hold must
-// outlive a flush. Keeping them separate is what stops a settled request from
-// being counted twice.
+//   - It double-counted every committed request for the hold's lifetime (the
+//     cost sits in both spend_nanos and the hold), so a budget of exactly N
+//     request-costs admitted only N-1. Measured, not theoretical.
+//   - It could only ever be reconciled by a TTL guess, so tuning it meant
+//     trading permanent under-admission against a brief over-admission.
+//
+// What is left is an honest, bounded gap: between finish() and the recorder's
+// next flush (<= 2s), a completed request's cost is in neither the reservation
+// nor spend_nanos. That window is small, self-closing, and far narrower than
+// the original bug, where a request was uncounted for its entire duration —
+// minutes, for a stream.
 //
 // Single Lua script so the deltas can't interleave with another Reserve.
 var settleScript = redis.NewScript(`
 local key = KEYS[1]
 local costDelta = tonumber(ARGV[1])
 local tpmDelta = tonumber(ARGV[2])
-local pending = tonumber(ARGV[3])
-local pendingTtl = tonumber(ARGV[4])
-local ttl = tonumber(ARGV[5])
+local ttl = tonumber(ARGV[3])
 
 local cost = redis.call('HINCRBY', key, 'cost_nanos', costDelta)
 local tpm = redis.call('HINCRBY', key, 'tpm', tpmDelta)
-
-if pending > 0 and pendingTtl > 0 then
-  redis.call('SET', key .. ':pending', pending, 'EX', pendingTtl)
-end
 
 if cost <= 0 and tpm <= 0 then
   redis.call('DEL', key)
@@ -123,35 +131,13 @@ end
 return {cost, tpm}
 `)
 
-// pendingTTL is how long a settled-but-uncommitted cost keeps counting against
-// the cap. It must exceed Recorder.FlushEvery (2s) plus a flush retry; 30s is
-// comfortably inside that and still self-healing if a hold is orphaned.
-const pendingTTL = 30 * time.Second
-
-// Settle removes a scope's in-flight reservation (the estimate) and records the
-// request's actual cost as a pending hold until the spend recorder commits.
-// The deltas are full negatives: the reservation is cleared, not adjusted.
-func (c *Cache) Settle(ctx context.Context, scope, id string, reservedCost, reservedTokens, actualCost, actualTokens int64) error {
-	pending := actualCost
-	if pending < 0 {
-		pending = 0
-	}
+// Settle removes a scope's in-flight reservation. The deltas are full
+// negatives: the reservation is cleared, not adjusted. This is a release, not a
+// reconciliation — the request's real cost is committed to spend_nanos by the
+// recorder and deliberately not held here (see the note above).
+func (c *Cache) Settle(ctx context.Context, scope, id string, reservedCost, reservedTokens int64) error {
 	return settleScript.Run(ctx, c.rdb, []string{reserveKey(scope, id)},
-		-reservedCost, -reservedTokens,
-		pending, int64(pendingTTL/time.Second), int64(reserveTTL/time.Second)).Err()
-}
-
-// Pending returns the settled-but-not-yet-committed cost for a scope, for
-// display in the console alongside the in-flight reservation.
-func (c *Cache) Pending(ctx context.Context, scope, id string) (int64, error) {
-	v, err := c.rdb.Get(ctx, reserveKey(scope, id)+":pending").Result()
-	if errors.Is(err, redis.Nil) {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	return hashInt(v), nil
+		-reservedCost, -reservedTokens, int64(reserveTTL/time.Second)).Err()
 }
 
 // Reserved returns the current in-flight reservation for a scope, for display
@@ -164,23 +150,14 @@ func (c *Cache) Reserved(ctx context.Context, scope, id string) (cost, tpm int64
 	return hashInt(vs[0]), hashInt(vs[1]), nil
 }
 
-// Held returns everything that must count against a cap but is not yet in
-// spend_nanos: live in-flight reservations plus settled cost still waiting on
-// the spend recorder's flush. This is the number admission compares with.
+// Held returns what must count against a cap but is not yet in spend_nanos:
+// the live in-flight reservations. This is the number admission compares with.
+//
+// There is deliberately no "settled but uncommitted" term: a finished request's
+// cost is not held, because nothing can clear such a hold when the recorder
+// commits (see Settle).
 func (c *Cache) Held(ctx context.Context, scope, id string) (cost, tpm int64, err error) {
-	k := reserveKey(scope, id)
-	pipe := c.rdb.Pipeline()
-	hash := pipe.HMGet(ctx, k, reserveCostField, reserveTPMField)
-	pending := pipe.Get(ctx, k+":pending")
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return 0, 0, err
-	}
-	vs := hash.Val()
-	pv, perr := pending.Result()
-	if perr != nil && !errors.Is(perr, redis.Nil) {
-		return 0, 0, perr
-	}
-	return hashInt(vs[0]) + hashInt(pv), hashInt(vs[1]), nil
+	return c.Reserved(ctx, scope, id)
 }
 
 // hashInt converts an HMGET element (nil when the field is absent) to int64,

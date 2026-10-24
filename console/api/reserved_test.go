@@ -20,11 +20,11 @@ func TestListKeys_IncludesReservedNanos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A request in flight, plus a settled-but-uncommitted cost.
+	// Two requests in flight against this key's cap.
 	if _, _, err := e.cache.Reserve(ctx, "key", key.ID, 300_000_000, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.cache.Settle(ctx, "key", key.ID, 0, 0, 200_000_000, 0); err != nil {
+	if _, _, err := e.cache.Reserve(ctx, "key", key.ID, 200_000_000, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -39,7 +39,7 @@ func TestListKeys_IncludesReservedNanos(t *testing.T) {
 		t.Fatal("key not in listing")
 	}
 	if got.ReservedNanos != 500_000_000 {
-		t.Fatalf("reserved_nanos should be in-flight 300M + pending 200M = 500M, got %d", got.ReservedNanos)
+		t.Fatalf("reserved_nanos should be the summed in-flight reservations 500M, got %d", got.ReservedNanos)
 	}
 }
 

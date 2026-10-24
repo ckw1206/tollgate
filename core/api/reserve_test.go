@@ -169,9 +169,12 @@ func TestAdmit_ConcurrentRequestsDoNotOvershootTPM(t *testing.T) {
 }
 
 // TestAdmit_ReservationReleasedOnSuccess: after a request finishes, the
-// in-flight reservation must be gone. A short-lived "pending" hold replaces it
-// until the spend recorder commits (see core/cache.Settle), which is correct —
-// but the in-flight part must not linger, or the scope slowly loses budget.
+// in-flight reservation must be gone. A lingering reservation would slowly
+// strand the scope's budget.
+//
+// The request's actual cost is deliberately NOT held against the cap: the
+// recorder commits it within ~2s, and holding it too would double-count every
+// committed request. See core/cache.Settle.
 func TestAdmit_ReservationReleasedOnSuccess(t *testing.T) {
 	e := newEnv(t, repo.KeyInput{BudgetType: "total", BudgetNanos: 100_000_000})
 	ctx := context.Background()
@@ -186,14 +189,12 @@ func TestAdmit_ReservationReleasedOnSuccess(t *testing.T) {
 	if cost != 0 || tokens != 0 {
 		t.Fatalf("in-flight reservation leaked after success: cost=%d tpm=%d", cost, tokens)
 	}
-	// The actual cost is held briefly so a burst before the next flush still
-	// sees it; it must be the request's real cost, not the estimate.
-	pending, err := e.srv.Cache.Pending(ctx, "key", e.key.ID)
+	held, _, err := e.srv.Cache.Held(ctx, "key", e.key.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending != 7_500_000 {
-		t.Fatalf("pending hold should be the actual cost 7500000, got %d", pending)
+	if held != 0 {
+		t.Fatalf("nothing should remain held after a settled request, got %d", held)
 	}
 }
 
@@ -228,21 +229,51 @@ func TestAdmit_ReservationReleasedOnBadRequest(t *testing.T) {
 	}
 }
 
-// TestAdmit_ReservationReleasedOnClientDisconnect: the streaming client goes
-// away mid-stream; upstream drains so usage stays exact, and the reservation
-// must be settled rather than leaked.
+// TestAdmit_ReservationReleasedOnClientDisconnect: the client goes away while
+// the request is genuinely IN FLIGHT, and the reservation must be released.
+//
+// This asserts the reservation is actually held at the moment of disconnect
+// (otherwise the test would pass vacuously against a build that never reserves
+// at all, which is how the original bug went unnoticed).
 func TestAdmit_ReservationReleasedOnClientDisconnect(t *testing.T) {
 	e := newEnv(t, repo.KeyInput{BudgetType: "total", BudgetNanos: 100_000_000})
-	e.prov.chunks = []string{`{"a":1}`, `{"a":2}`, `{"a":3}`}
+	bp := newBlockingProvider(llm.Usage{Input: 1000, Output: 500})
+	e.setProvider(bp)
 	ctx := context.Background()
 
 	r := httptest.NewRequest("POST", "/v1/chat/completions",
 		strings.NewReader(`{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
 	r.Header.Set("Authorization", "Bearer "+e.raw)
-	e.h.ServeHTTP(&failingWriter{ResponseRecorder: httptest.NewRecorder()}, r)
+
+	// Cancel the client's context while the provider is parked: a real
+	// mid-flight disconnect.
+	cctx, cancel := context.WithCancel(r.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.h.ServeHTTP(&failingWriter{ResponseRecorder: httptest.NewRecorder()}, r.WithContext(cctx))
+	}()
+
+	select {
+	case <-bp.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request never reached upstream")
+	}
+	// Precondition: the request is in flight and its budget IS reserved, so a
+	// later zero is meaningful rather than vacuous.
+	if cost, _, _ := e.srv.Cache.Reserved(ctx, "key", e.key.ID); cost == 0 {
+		t.Fatal("precondition: expected an in-flight reservation while parked upstream")
+	}
+	cancel()
+	bp.releaseAll()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("request did not finish after disconnect")
+	}
 
 	if cost, tokens, _ := e.srv.Cache.Reserved(ctx, "key", e.key.ID); cost != 0 || tokens != 0 {
-		t.Fatalf("reservation leaked after client disconnect: cost=%d tpm=%d", cost, tokens)
+		t.Fatalf("reservation leaked after client disconnect mid-flight: cost=%d tpm=%d", cost, tokens)
 	}
 }
 
@@ -313,13 +344,15 @@ func TestAdmit_NoReservationLeakUnderChurn(t *testing.T) {
 }
 
 // TestAdmit_ReservationReleasedOnRPMLimit: a refusal from a LATER check must
-// release reservations taken by an earlier scope, or a rejected request
-// permanently consumes the budget it never used.
+// release reservations taken by an earlier scope within the SAME request, or a
+// rejected request permanently consumes budget it never used.
+//
+// The key has a budget (reserved first, since key is the tightest scope) and an
+// RPM limit of 1. The first request settles normally and burns the RPM slot.
+// The second reserves the key's budget, then is refused by RPM — so the
+// reservation taken moments earlier in the same call must be released.
 func TestAdmit_ReservationReleasedOnRPMLimit(t *testing.T) {
 	one := int32(1)
-	// Budget reservation is taken first (in scope order), then RPM refuses the
-	// second request. The first request's budget reservation was already
-	// settled by then, so the second must leave nothing behind.
 	e := newEnv(t, repo.KeyInput{BudgetType: "total", BudgetNanos: 100_000_000, RPMLimit: &one})
 	ctx := context.Background()
 
@@ -331,6 +364,51 @@ func TestAdmit_ReservationReleasedOnRPMLimit(t *testing.T) {
 	}
 	if cost, tokens, _ := e.srv.Cache.Reserved(ctx, "key", e.key.ID); cost != 0 || tokens != 0 {
 		t.Fatalf("reservation leaked on RPM refusal: cost=%d tpm=%d", cost, tokens)
+	}
+}
+
+// TestAdmit_BudgetCapacityIsExactlyTheLimit pins the boundary at the heart of
+// the fix: a cap of exactly N estimates must admit N requests, not N-1.
+//
+// An earlier version compared `committed + Reserve()` where Reserve already
+// returned a total including this request, charging it twice and shrinking
+// every budget to floor(cap/estimate)-1. The single-request case masked it,
+// because `>` and the double-charge cancelled at that one boundary.
+func TestAdmit_BudgetCapacityIsExactlyTheLimit(t *testing.T) {
+	const est = 10_245_000 // chatBody's estimate: 1024 default output at fast prices
+	const actual = 7_500_000
+	ctx := context.Background()
+	e := newEnv(t, repo.KeyInput{BudgetType: "total", BudgetNanos: 3 * est})
+
+	admitted := 0
+	for i := 0; i < 5; i++ {
+		w := e.do("POST", "/v1/chat/completions", e.raw, chatBody)
+		if w.Code != 200 {
+			break
+		}
+		admitted++
+		// Simulate the recorder committing this request's spend between
+		// requests, which is what happens in production within 2s.
+		if _, err := e.db.Pool.Exec(ctx,
+			`UPDATE api_keys SET spend_nanos = spend_nanos + $1 WHERE id=$2`, actual, e.key.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if admitted != 3 {
+		t.Fatalf("a cap of exactly 3 estimates must admit 3 requests, got %d", admitted)
+	}
+}
+
+// TestAdmit_TPMBoundaryIsInclusive: a request landing exactly on the limit does
+// not exceed it, so it is admitted. This matches the budget comparison, which
+// uses the same `>` rather than `>=`.
+func TestAdmit_TPMBoundaryIsInclusive(t *testing.T) {
+	// chatBody estimates 1026 tokens (1024 default output + input); the fake
+	// provider reports 1500 actual. A limit equal to the estimate must admit.
+	limit := int32(1026)
+	e := newEnv(t, repo.KeyInput{TPMLimit: &limit})
+	if w := e.do("POST", "/v1/chat/completions", e.raw, chatBody); w.Code != 200 {
+		t.Fatalf("exactly-on-the-limit request should be admitted, got %d %s", w.Code, w.Body)
 	}
 }
 

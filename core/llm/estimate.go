@@ -3,9 +3,13 @@ package llm
 // Estimating the cost and token footprint of a request before it runs (#23, #28).
 //
 // The estimate exists only to reserve against a cap while a request is in
-// flight. It is replaced by exact usage in finish(), so it must be an UPPER
-// bound on what the request can plausibly consume — an underestimate reopens
-// the overshoot it is meant to close.
+// flight. It is replaced by exact usage in finish(), so it should approximate
+// what the request can plausibly consume. It is explicitly NOT an upper bound:
+// neither the input heuristic nor the default output is worst-case (see
+// EstimateInputTokens and defaultOutputTokens). Admission is best-effort — a
+// request can overrun its reservation, bounded by the model's context window,
+// and the overshoot is realized rather than refused because finish() records
+// the real cost. Spend accounting itself is always exact.
 
 // defaultOutputTokens is used when a request sets no max_tokens: the client has
 // made no commitment about output length, so the reservation assumes a typical
@@ -18,10 +22,13 @@ package llm
 // hard ceiling on what a model CAN emit, not a statement about what a request
 // WILL emit.
 //
-// The residual risk is bounded and acceptable: a request that omits max_tokens
-// and then generates an unusually long completion can overrun its reservation
-// by at most (actual - default) tokens. Callers who need a hard guarantee set
-// max_tokens, which is exactly the signal the reservation respects.
+// The cost of that choice is real and worth stating plainly: a request that
+// omits max_tokens and then generates a long completion can exceed its
+// reservation by a large factor — 32x for a 32k-token completion against this
+// default. That overrun is not refused; it is recorded at its true cost. So for
+// requests without max_tokens the cap is an admission heuristic, not a hard
+// ceiling. Callers who need a hard guarantee set max_tokens, which is exactly
+// the signal the reservation respects.
 const defaultOutputTokens = 1024
 
 // EstimateOutputTokens is the output bound reserved for a request: the client's
@@ -44,10 +51,14 @@ func EstimateOutputTokens(req *ChatRequest, m *Model) int64 {
 // EstimateInputTokens approximates the prompt size without a tokenizer, which
 // the gateway does not have (providers tokenize upstream, per provider).
 //
-// ~4 bytes per token is the standard English heuristic. It is an approximation
-// in both directions, so the output bound above is what makes the total an
-// upper bound in practice; this term is deliberately not inflated, since
-// over-counting input on a large context would deny most requests outright.
+// ~4 bytes per token is the standard English heuristic. It is deliberately NOT
+// an upper bound: CJK and other non-Latin text tokenizes at roughly 1-2 bytes
+// per token, so this undercounts such prompts by 2-4x. Inflating it to cover
+// that would overcount every English request instead, denying traffic that
+// fits. The reservation is therefore advisory for input size, and a request
+// that omits max_tokens can exceed its reservation on both terms (see
+// defaultOutputTokens). Admission is best-effort against a cap, not a hard
+// guarantee; the committed spend in spend_nanos is always exact.
 func EstimateInputTokens(req *ChatRequest) int64 {
 	if req == nil {
 		return 0

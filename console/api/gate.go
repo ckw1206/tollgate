@@ -41,9 +41,11 @@ func (s *Server) gate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if g.BudgetType != "unlimited" {
-		// reserved_nanos is in-flight plus settled-but-uncommitted cost (#23):
-		// money already committed against the cap that spend_nanos does not yet
-		// show. Displaying spend without it makes the bar understate usage.
+		// reserved_nanos is the in-flight reservation (#23): budget already
+		// spoken for by requests that have not finished, which spend_nanos does
+		// not yet show. Displaying spend without it makes the bar understate
+		// usage. Advisory only — if Redis is unavailable this reads 0 rather
+		// than failing the page, since the number is informational.
 		reserved, _, _ := s.Cache.Held(r.Context(), "group", g.ID)
 		resp["budget"] = map[string]any{
 			"type":           g.BudgetType,

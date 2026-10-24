@@ -52,9 +52,17 @@ func TestEstimate_IntegersOnlyAndPositive(t *testing.T) {
 	if cost <= 0 || tokens <= 0 {
 		t.Fatalf("expected positive estimate, got cost=%d tokens=%d", cost, tokens)
 	}
-	// Integer nano-USD: no float ever enters the money path.
-	if cost != int64(cost) {
-		t.Fatal("cost must be an integer count of nanos")
+	// Money is an exact integer count of nanos. Asserting that a value already
+	// typed int64 "is an int64" can never fail, so instead pin that the estimate
+	// matches the integer cost formula with no rounding loss:
+	// cost = (in*inMicros + out*outMicros) / 1000.
+	in := EstimateInputTokens(req)
+	out := EstimateOutputTokens(req, m)
+	if want := (in*2_500_000 + out*10_000_000) / 1000; cost != want {
+		t.Fatalf("estimate must follow the integer cost formula: got %d, want %d", cost, want)
+	}
+	if tokens != in+out {
+		t.Fatalf("tokens must be input+output: got %d, want %d", tokens, in+out)
 	}
 }
 

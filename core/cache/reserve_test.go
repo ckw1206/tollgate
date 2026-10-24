@@ -3,22 +3,26 @@ package cache
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // Tests for the in-flight reservation primitives behind #23 and #28.
 
-func TestReserve_AccumulatesAndReturnsTotals(t *testing.T) {
+func TestReserve_AccumulatesAndReportsPriorTotal(t *testing.T) {
+	// Reserve reports the total held BEFORE this call (so the caller can add
+	// its own estimate); the stored value is what accumulates.
 	c, _ := newTest(t)
 	ctx := context.Background()
 
-	cost, _, err := c.Reserve(ctx, "key", "k1", 100, 0)
-	if err != nil || cost != 100 {
-		t.Fatalf("first reserve: cost=%d err=%v", cost, err)
+	prior, _, err := c.Reserve(ctx, "key", "k1", 100, 0)
+	if err != nil || prior != 0 {
+		t.Fatalf("first reserve: prior=%d err=%v", prior, err)
 	}
-	cost, _, err = c.Reserve(ctx, "key", "k1", 50, 0)
-	if err != nil || cost != 150 {
-		t.Fatalf("second reserve should accumulate: cost=%d err=%v", cost, err)
+	prior, _, err = c.Reserve(ctx, "key", "k1", 50, 0)
+	if err != nil || prior != 100 {
+		t.Fatalf("second reserve should report prior=100: prior=%d err=%v", prior, err)
+	}
+	if stored, _, _ := c.Reserved(ctx, "key", "k1"); stored != 150 {
+		t.Fatalf("stored reservation should accumulate to 150, got %d", stored)
 	}
 }
 
@@ -27,8 +31,12 @@ func TestReserve_ScopesAreIndependent(t *testing.T) {
 	ctx := context.Background()
 
 	c.Reserve(ctx, "key", "k1", 100, 0)
-	if cost, _, _ := c.Reserve(ctx, "group", "k1", 10, 0); cost != 10 {
-		t.Fatalf("key and group must not share counters, got %d", cost)
+	// A fresh scope has nothing prior, even though another scope is holding 100.
+	if prior, _, _ := c.Reserve(ctx, "group", "k1", 10, 0); prior != 0 {
+		t.Fatalf("key and group must not share counters, got prior=%d", prior)
+	}
+	if stored, _, _ := c.Reserved(ctx, "group", "k1"); stored != 10 {
+		t.Fatalf("group reservation should be 10, got %d", stored)
 	}
 }
 
@@ -50,52 +58,50 @@ func TestRelease_SubtractsAndClampsToZero(t *testing.T) {
 	}
 }
 
-func TestSettle_ClearsInflightAndHoldsActualOnce(t *testing.T) {
+func TestSettle_ClearsInflightReservation(t *testing.T) {
 	c, _ := newTest(t)
 	ctx := context.Background()
 
 	c.Reserve(ctx, "key", "k1", 100, 50)
-	if err := c.Settle(ctx, "key", "k1", 100, 50, 120, 60); err != nil {
+	if err := c.Settle(ctx, "key", "k1", 100, 50); err != nil {
 		t.Fatal(err)
 	}
-	// The in-flight estimate must be gone entirely: nothing is in flight now.
+	// The reservation is dropped outright. The request's real cost is NOT held
+	// against the cap (see Settle's comment): holding it would double-count once
+	// the recorder commits, which measured out as floors(cap/est)-1 capacity.
 	if cost, tpm, _ := c.Reserved(ctx, "key", "k1"); cost != 0 || tpm != 0 {
-		t.Fatalf("in-flight should clear on settle, got cost=%d tpm=%d", cost, tpm)
+		t.Fatalf("reservation should clear on settle, got cost=%d tpm=%d", cost, tpm)
 	}
-	if p, _ := c.Pending(ctx, "key", "k1"); p != 120 {
-		t.Fatalf("pending should be the actual cost 120, got %d", p)
-	}
-	// Held must count the actual once, not once per counter.
-	if h, _, _ := c.Held(ctx, "key", "k1"); h != 120 {
-		t.Fatalf("Held must not double-count: got %d, want 120", h)
+	if h, _, _ := c.Held(ctx, "key", "k1"); h != 0 {
+		t.Fatalf("nothing should remain held after settle, got %d", h)
 	}
 }
 
-func TestSettle_UnderestimateHoldsTheRealCost(t *testing.T) {
-	// A request that costs more than it reserved must raise the hold to the
-	// real figure, not leave the lower estimate behind.
+func TestSettle_OnlyClearsThisRequestsEstimate(t *testing.T) {
+	// Settling one request must not free another request's reservation on the
+	// same scope.
+	c, _ := newTest(t)
+	ctx := context.Background()
+
+	c.Reserve(ctx, "key", "k1", 100, 0) // request A (in flight)
+	c.Reserve(ctx, "key", "k1", 30, 0)  // request B (in flight)
+	if err := c.Settle(ctx, "key", "k1", 30, 0); err != nil {
+		t.Fatal(err)
+	}
+	if cost, _, _ := c.Reserved(ctx, "key", "k1"); cost != 100 {
+		t.Fatalf("request A's reservation must survive B's settle: got %d, want 100", cost)
+	}
+}
+
+func TestHeld_IsTheInflightReservation(t *testing.T) {
 	c, _ := newTest(t)
 	ctx := context.Background()
 
 	c.Reserve(ctx, "key", "k1", 100, 0)
-	c.Settle(ctx, "key", "k1", 100, 0, 500, 0)
-	if p, _ := c.Pending(ctx, "key", "k1"); p != 500 {
-		t.Fatalf("pending should be the real cost 500, got %d", p)
-	}
-}
-
-func TestHeld_CountsReservationAndPendingTogether(t *testing.T) {
-	// The admission comparison must see a concurrent reservation AND a
-	// not-yet-committed settle at the same time.
-	c, _ := newTest(t)
-	ctx := context.Background()
-
-	c.Reserve(ctx, "key", "k1", 100, 0)
-	c.Settle(ctx, "key", "k1", 100, 0, 100, 0) // becomes pending
-	c.Reserve(ctx, "key", "k1", 25, 0)         // a new request in flight
+	c.Reserve(ctx, "key", "k1", 25, 0)
 	h, _, _ := c.Held(ctx, "key", "k1")
 	if h != 125 {
-		t.Fatalf("Held should be pending 100 + in-flight 25 = 125, got %d", h)
+		t.Fatalf("Held should be the summed in-flight reservations 125, got %d", h)
 	}
 }
 
@@ -109,23 +115,52 @@ func TestReserve_TTLIsSetAsLeakGuard(t *testing.T) {
 	}
 }
 
-func TestPending_ExpiresOnItsOwn(t *testing.T) {
-	// The pending hold is the self-healing part: if the spend recorder never
-	// commits, the hold must age out rather than pin the scope.
-	c, mr := newTest(t)
+func TestReserve_ReturnsPriorTotalExcludingThisRequest(t *testing.T) {
+	// The caller compares committed + prior + thisEstimate against the cap, so
+	// the returned total must EXCLUDE the estimate just added. Returning the
+	// post-increment value charged the request twice and made capacity
+	// floor(cap/est)-1 instead of floor(cap/est).
+	c, _ := newTest(t)
 	ctx := context.Background()
 
-	c.Reserve(ctx, "key", "k1", 100, 0)
-	c.Settle(ctx, "key", "k1", 100, 0, 100, 0)
-	if p, _ := c.Pending(ctx, "key", "k1"); p != 100 {
-		t.Fatalf("expected a pending hold, got %d", p)
+	prior, _, err := c.Reserve(ctx, "key", "k1", 100, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mr.FastForward(pendingTTL + time.Second)
-	if p, _ := c.Pending(ctx, "key", "k1"); p != 0 {
-		t.Fatalf("pending hold should expire, got %d", p)
+	if prior != 0 {
+		t.Fatalf("first reserve must report prior=0, got %d", prior)
 	}
-	if h, _, _ := c.Held(ctx, "key", "k1"); h != 0 {
-		t.Fatalf("nothing should be held after expiry, got %d", h)
+	prior, _, err = c.Reserve(ctx, "key", "k1", 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prior != 100 {
+		t.Fatalf("second reserve must report prior=100 (the first only), got %d", prior)
+	}
+}
+
+func TestSettle_RepeatedSettleDoesNotAccumulate(t *testing.T) {
+	// Settling must be a subtraction of the reservation, never an accumulation
+	// of cost. An earlier design accumulated each request's actual cost into a
+	// separate "pending" key, which double-counted every committed request and
+	// shrank effective capacity to floor(cap/estimate)-1.
+	c, _ := newTest(t)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if _, _, err := c.Reserve(ctx, "key", "k1", 100, 0); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Settle(ctx, "key", "k1", 100, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held, _, err := c.Held(ctx, "key", "k1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held != 0 {
+		t.Fatalf("three settled requests must leave nothing held, got %d", held)
 	}
 }
 
