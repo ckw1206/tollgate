@@ -25,6 +25,10 @@ const (
 	SettingsRead  Permission = "settings:read"
 	SettingsWrite Permission = "settings:write"
 	PlaygroundUse Permission = "playground:use"
+	// MetricsRead guards the admit-path instrumentation endpoint (#33). It is
+	// admin-only: the numbers describe gateway internals, not the caller's own
+	// keys or spend, so there is no "own" variant of it.
+	MetricsRead Permission = "metrics:read"
 )
 
 var viewer = []Permission{ModelsRead, KeysReadOwn, GroupsReadOwn, SpendReadOwn}
@@ -33,7 +37,7 @@ var roles = map[string][]Permission{
 	"viewer": viewer,
 	"member": append(slices.Clone(viewer), KeysWriteOwn, PlaygroundUse),
 	"admin": {ModelsRead, ModelsWrite, KeysReadOwn, KeysWriteOwn, KeysReadAll, KeysWriteAll, UsersRead, UsersWrite,
-		GroupsReadOwn, GroupsReadAll, GroupsWrite, InvitesRead, InvitesWrite, SpendReadOwn, SpendReadAll, AuditRead, SettingsRead, SettingsWrite, PlaygroundUse},
+		GroupsReadOwn, GroupsReadAll, GroupsWrite, InvitesRead, InvitesWrite, SpendReadOwn, SpendReadAll, AuditRead, SettingsRead, SettingsWrite, PlaygroundUse, MetricsRead},
 }
 
 func Permissions(role string) []Permission { return roles[role] }

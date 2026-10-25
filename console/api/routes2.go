@@ -32,5 +32,9 @@ func (s *Server) extraRoutes() map[string]http.Handler {
 		"GET " + p + "/settings":                     req(rbac.SettingsRead, s.getSettings),
 		"PUT " + p + "/settings":                     req(rbac.SettingsWrite, s.putSettings),
 		"POST " + p + "/settings/webhook/test":       req(rbac.SettingsWrite, s.testWebhook),
+		// Admit-path instrumentation (#33). Admin-only via metrics:read; see
+		// console/api/metrics.go for the read and core/api/metrics.go for why
+		// the gateway port also serves it unauthenticated.
+		"GET " + p + "/metrics": req(rbac.MetricsRead, s.metrics),
 	}
 }

@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"tollgate/core/db/repo"
+	"tollgate/core/metrics"
 )
 
 type authKey struct{}
@@ -21,7 +23,13 @@ func (s *Server) auth(next http.Handler) http.Handler {
 			WriteError(w, 401, "authentication_error", "invalid_api_key", "missing API key")
 			return
 		}
+		// Instrumentation only (#33) — the lookup below is unchanged and
+		// uncached. The timing is deliberately NOT stored in the request
+		// context: nothing downstream reads it, and a context value would keep
+		// the measurement alive for the life of a stream for no reason.
+		start := time.Now()
 		info, err := s.Store.AuthByKeyHash(r.Context(), repo.HashToken(token))
+		metrics.Observe(metrics.OpAuthLookup, time.Since(start))
 		if errors.Is(err, repo.ErrNotFound) {
 			WriteError(w, 401, "authentication_error", "invalid_api_key", "invalid API key")
 			return

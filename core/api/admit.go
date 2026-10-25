@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"time"
 
 	"tollgate/core/cache"
 	"tollgate/core/db/repo"
 	"tollgate/core/llm"
+	"tollgate/core/metrics"
 )
 
 type scope struct {
@@ -85,7 +87,9 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request, info *repo.AuthIn
 		// Budget: committed spend + in-flight reservations + this estimate.
 		if sc.limits.BudgetType != "" && sc.limits.BudgetType != "unlimited" {
 			// prior excludes this request's estimate, which is added below.
+			reserveStart := time.Now()
 			prior, _, err := s.Cache.Reserve(r.Context(), sc.name, sc.id, estCost, 0)
+			metrics.Observe(metrics.OpReserveAdd, time.Since(reserveStart))
 			if err != nil {
 				slog.Error("reservation unavailable", "err", err)
 				release()
@@ -105,7 +109,9 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request, info *repo.AuthIn
 		// TPM: committed tokens (this minute) + in-flight reservations.
 		if sc.limits.TPMLimit != nil {
 			// prior excludes this request's estimate, which is added below.
+			reserveStart := time.Now()
 			_, prior, err := s.Cache.Reserve(r.Context(), sc.name, sc.id, 0, estTokens)
+			metrics.Observe(metrics.OpReserveAdd, time.Since(reserveStart))
 			if err != nil {
 				slog.Error("reservation unavailable", "err", err)
 				release()
@@ -116,7 +122,9 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request, info *repo.AuthIn
 			// Tokens are charged by AddTPM in finish() on the same path that
 			// clears the reservation, so the in-flight reservation is the whole
 			// story here — there is no second counter to reconcile.
+			committedStart := time.Now()
 			committed, err := s.Cache.TPM(r.Context(), sc.name, sc.id, now)
+			metrics.Observe(metrics.OpTPMRead, time.Since(committedStart))
 			if err != nil {
 				slog.Error("rate limiter unavailable", "err", err)
 				release()
@@ -142,7 +150,9 @@ func (s *Server) admit(w http.ResponseWriter, r *http.Request, info *repo.AuthIn
 		if sc.limits.RPMLimit == nil {
 			continue
 		}
+		rpmStart := time.Now()
 		n, err := s.Cache.HitRPM(r.Context(), sc.name, sc.id, now)
+		metrics.Observe(metrics.OpRPMHit, time.Since(rpmStart))
 		if err != nil {
 			slog.Error("rate limiter unavailable", "err", err)
 			release()
@@ -182,9 +192,11 @@ func (r *reservation) release(c *cache.Cache, ctx context.Context) {
 		if cost == 0 && tokens == 0 {
 			continue
 		}
+		releaseStart := time.Now()
 		if err := c.Release(ctx, sc.name, sc.id, cost, tokens); err != nil {
 			slog.Error("release reservation", "scope", sc.name, "err", err)
 		}
+		metrics.Observe(metrics.OpReserveRelease, time.Since(releaseStart))
 	}
 	// Any later settle would be a no-op on the released estimate; clear so a
 	// double settle can't subtract the estimate twice.
@@ -210,9 +222,11 @@ func (r *reservation) settle(c *cache.Cache) {
 		if rc == 0 && rt == 0 {
 			continue
 		}
+		settleStart := time.Now()
 		if err := c.Settle(ctx, sc.name, sc.id, rc, rt); err != nil {
 			slog.Error("settle reservation", "scope", sc.name, "err", err)
 		}
+		metrics.Observe(metrics.OpReserveSettle, time.Since(settleStart))
 	}
 	r.scopes = nil
 }

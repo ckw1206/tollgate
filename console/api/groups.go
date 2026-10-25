@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"tollgate/console/auth"
 	"tollgate/console/rbac"
 	"tollgate/core/api"
 	"tollgate/core/db/repo"
+	"tollgate/core/metrics"
 )
 
 func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +43,10 @@ func (s *Server) withReservedGroup(r *http.Request, g *repo.Group) {
 	if g.BudgetType == "unlimited" {
 		return
 	}
-	if n, _, err := s.Cache.Held(r.Context(), "group", g.ID); err == nil {
+	heldStart := time.Now()
+	n, _, err := s.Cache.Held(r.Context(), "group", g.ID)
+	metrics.Observe(metrics.OpReservedRead, time.Since(heldStart))
+	if err == nil {
 		g.ReservedNanos = n
 	}
 }

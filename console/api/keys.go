@@ -9,6 +9,7 @@ import (
 	"tollgate/console/rbac"
 	"tollgate/core/api"
 	"tollgate/core/db/repo"
+	"tollgate/core/metrics"
 )
 
 func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +31,10 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	// error leaves it zero rather than failing a read-only listing.
 	for i := range ks {
 		if ks[i].BudgetType != "unlimited" {
-			if n, _, err := s.Cache.Held(r.Context(), "key", ks[i].ID); err == nil {
+			heldStart := time.Now()
+			n, _, err := s.Cache.Held(r.Context(), "key", ks[i].ID)
+			metrics.Observe(metrics.OpReservedRead, time.Since(heldStart))
+			if err == nil {
 				ks[i].ReservedNanos = n
 			}
 		}
