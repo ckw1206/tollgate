@@ -37,6 +37,7 @@ type tenv struct {
 	setup   *SetupToken // non-nil only from newEmptyTenv, like main
 	token   string      // setup's raw token
 	redis   *miniredis.Miniredis
+	cache   *cache.Cache // the same instance the gateway and console server use
 	gateway *api.Server
 	prov    *fakeProvider
 	mu      sync.Mutex
@@ -105,6 +106,7 @@ func buildTenv(t *testing.T, withUsers bool) *tenv {
 	mr := miniredis.RunT(t)
 	e.redis = mr
 	c := cache.FromClient(redis.NewClient(&redis.Options{Addr: mr.Addr()}))
+	e.cache = c
 	v, _ := vault.New(bytes.Repeat([]byte{3}, 32))
 	// Seed the models the playground tests need, and build the gateway
 	// registry from the very same rows so GET /playground/models (DB) and the

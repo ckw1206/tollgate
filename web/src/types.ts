@@ -8,6 +8,10 @@ export interface Limits {
   budget_reset_at: string | null
   rpm_limit: number | null
   tpm_limit: number | null
+  // Committed against the cap but not yet in spend_nanos: requests in flight
+  // counted against the cap. Optional because it is only populated on list
+  // endpoints that consult Redis.
+  reserved_nanos?: number
 }
 
 export interface User {
@@ -188,6 +192,10 @@ export interface GateBudget {
   type: BudgetType
   budget_nanos: number
   spend_nanos: number
+  // In-flight reservation (#23): budget spoken for by requests that have not
+  // finished. Counts against the cap but is not in spend_nanos, so the meter
+  // must include it.
+  reserved_nanos?: number
   reset_at: string | null
 }
 

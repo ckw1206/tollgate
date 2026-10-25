@@ -39,3 +39,6 @@ web/dist/*
 
 # Local planning docs
 docs/superpowers/
+
+# Local Go build cache (workspace-local, never committed)
+.gocache/

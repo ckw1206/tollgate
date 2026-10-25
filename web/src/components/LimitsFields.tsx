@@ -45,10 +45,16 @@ export function LimitsFields({ value, onChange }: { value: LimitsState; onChange
   )
 }
 
-// budgetText: "12.40 / 50.00 monthly" or "Unlimited".
+// budgetText: "12.40 / 50.00 monthly" or "Unlimited". Counts in-flight
+// reservations as used (#23), so the figure matches what the gateway enforces;
+// a non-zero reserve is marked so it is clear the number can fall back down
+// once those requests settle.
 export function budgetText(l: Limits) {
   if (l.budget_type === 'unlimited') return 'Unlimited'
-  return `${usd(l.spend_nanos).slice(1)} / ${usd(l.budget_nanos).slice(1)} ${l.budget_type}`
+  const reserved = l.reserved_nanos ?? 0
+  const used = l.spend_nanos + reserved
+  const suffix = reserved > 0 ? ` (+${usd(reserved).slice(1)} in flight)` : ''
+  return `${usd(used).slice(1)} / ${usd(l.budget_nanos).slice(1)} ${l.budget_type}${suffix}`
 }
 
 export const limitText = (n: number | null) => (n == null ? '∞' : String(n))

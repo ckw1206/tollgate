@@ -25,6 +25,16 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	if ks == nil {
 		ks = []repo.APIKey{}
 	}
+	// Populate the in-flight reservation (#23) so the console can show what is
+	// committed against the cap but not yet in spend_nanos. Advisory: a Redis
+	// error leaves it zero rather than failing a read-only listing.
+	for i := range ks {
+		if ks[i].BudgetType != "unlimited" {
+			if n, _, err := s.Cache.Held(r.Context(), "key", ks[i].ID); err == nil {
+				ks[i].ReservedNanos = n
+			}
+		}
+	}
 	api.WriteJSON(w, 200, ks)
 }
 

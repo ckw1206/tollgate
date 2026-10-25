@@ -19,6 +19,7 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 			storeErr(w, err)
 			return
 		}
+		s.withReservedGroup(r, g)
 		api.WriteJSON(w, 200, []repo.Group{*g})
 		return
 	}
@@ -27,7 +28,22 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
+	for i := range gs {
+		s.withReservedGroup(r, &gs[i])
+	}
 	api.WriteJSON(w, 200, gs)
+}
+
+// withReservedGroup fills in the in-flight reservation (#23) so the console can
+// show what is committed against the cap but not yet in spend_nanos. Advisory:
+// a Redis error leaves it zero rather than failing a read-only listing.
+func (s *Server) withReservedGroup(r *http.Request, g *repo.Group) {
+	if g.BudgetType == "unlimited" {
+		return
+	}
+	if n, _, err := s.Cache.Held(r.Context(), "group", g.ID); err == nil {
+		g.ReservedNanos = n
+	}
 }
 
 func validGroup(w http.ResponseWriter, in repo.GroupInput) bool {
