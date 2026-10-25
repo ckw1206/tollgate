@@ -29,4 +29,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /v1/embeddings", s.auth(http.HandlerFunc(s.embeddings)))
 	mux.Handle("GET /v1/models", s.auth(http.HandlerFunc(s.models)))
 	mux.HandleFunc("GET /health", s.health)
+	// Admit-path instrumentation (#33). Unauthenticated and internal-ish: see
+	// metricsHandler for why, and for what the document deliberately excludes.
+	mux.HandleFunc("GET /metrics", s.metricsHandler)
 }

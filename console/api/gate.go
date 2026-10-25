@@ -7,6 +7,7 @@ import (
 	"tollgate/console/auth"
 	"tollgate/console/rbac"
 	"tollgate/core/api"
+	"tollgate/core/metrics"
 )
 
 // gate: the one-line status bar shared by every console page. The budget is
@@ -46,7 +47,9 @@ func (s *Server) gate(w http.ResponseWriter, r *http.Request) {
 		// not yet show. Displaying spend without it makes the bar understate
 		// usage. Advisory only — if Redis is unavailable this reads 0 rather
 		// than failing the page, since the number is informational.
+		heldStart := time.Now()
 		reserved, _, _ := s.Cache.Held(r.Context(), "group", g.ID)
+		metrics.Observe(metrics.OpReservedRead, time.Since(heldStart))
 		resp["budget"] = map[string]any{
 			"type":           g.BudgetType,
 			"budget_nanos":   g.BudgetNanos,
