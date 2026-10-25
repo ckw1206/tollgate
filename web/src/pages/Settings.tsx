@@ -122,7 +122,7 @@ export default function Settings() {
           {!ro && <span className="mt-1 block text-xs text-muted-foreground">PNG, JPEG or WebP · square · min 128×128 · max 256 KB</span>}
           <div className="mt-1"><ErrorText>{iconError}</ErrorText></div>
         </div>
-        <Field label="Timezone" hint="Daily/monthly budgets reset at midnight in this timezone.">
+        <Field label="Timezone" hint="Daily/monthly budgets reset at midnight in this timezone. Changing it takes effect immediately: windows that are still running move to the new midnight and keep the spend they have already accrued; a window that has already expired is reset as usual.">
           <select className={inputCls} required disabled={ro} value={form.timezone} onChange={set('timezone')}>
             {zoneOptions.map((z) => <option key={z} value={z}>{z}</option>)}
           </select>
