@@ -435,10 +435,14 @@ export default function Dashboard() {
           {
             head: 'API key',
             cell: (l) => (
-              <span className="flex flex-col leading-[1.25]">
-                <span className="font-medium">{l.key_alias}</span>
-                <code className="font-mono text-[11px] text-muted-foreground">{l.key_prefix}…</code>
-              </span>
+              playground(l) ? (
+                <span className="font-medium">Playground</span>
+              ) : (
+                <span className="flex flex-col leading-[1.25]">
+                  <span className="font-medium">{l.key_alias}</span>
+                  <code className="font-mono text-[11px] text-muted-foreground">{l.key_prefix}…</code>
+                </span>
+              )
             ),
           },
           { head: 'Model', cell: (l) => l.model_name },
@@ -488,14 +492,18 @@ function utc(iso: string) {
   return Number.isNaN(d.getTime()) ? iso || '—' : d.toISOString()
 }
 
+// Playground requests carry no key; the API fills in a placeholder alias and prefix.
+const playground = (l: SpendLog) => l.source === 'playground'
+
 function requestDetail(l: SpendLog) {
   const n = (v: number) => fmt.format(v)
   return [
+    { label: 'Started (server time)', value: when(l.created_at) },
     { label: 'Started (UTC)', value: utc(l.created_at) },
     { label: 'Log ID', value: l.id },
     { label: 'Model', value: l.model_name },
     { label: 'Provider', value: l.provider },
-    { label: 'API key', value: `${l.key_alias} (${l.key_prefix}…)` },
+    { label: 'API key', value: playground(l) ? 'None (playground)' : `${l.key_alias} (${l.key_prefix}…)` },
     { label: 'Source', value: l.source },
     { label: 'Input tokens', value: n(l.input_tokens) },
     { label: 'Cache read tokens', value: n(l.cache_read_tokens) },

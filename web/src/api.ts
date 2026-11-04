@@ -193,6 +193,21 @@ export const fromNanos = (nanos: number) => String(nanos / 1e9)
 export const toMicros = (dollars: string) => Math.round(parseFloat(dollars || '0') * 1e6)
 export const fromMicros = (micros: number) => String(micros / 1e6)
 export const num = (s: string): number | null => (s.trim() === '' ? null : Number(s))
-export const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : '—')
+// Console times show in the server timezone (Settings), with the zone named, so they agree with
+// the dashboard's day buckets and budget resets. AuthProvider sets it from /auth/me.
+let serverTz: string | undefined
+export const setServerTimezone = (tz: string | undefined) => {
+  serverTz = tz || undefined
+}
+export const when = (iso: string | null | undefined) => {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  try {
+    return d.toLocaleString(undefined, { timeZone: serverTz, timeZoneName: 'short' })
+  } catch {
+    // A zone Go accepts but this browser's Intl doesn't (e.g. "Local"): browser zone, still labelled.
+    return d.toLocaleString(undefined, { timeZoneName: 'short' })
+  }
+}
 export const short = (id: string | null | undefined) => (id ? id.slice(0, 8) : '—')
 export const dash = (s: string | null | undefined) => (s ? s : '—')

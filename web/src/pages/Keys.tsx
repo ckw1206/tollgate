@@ -161,7 +161,7 @@ export default function Keys() {
             )}
             {!regen && (
               <p className="text-xs text-muted-foreground">
-                Old key <code className="font-mono">{rotating.key_prefix}…</code> stops at {new Date(stopsAt(rotating, grace)).toLocaleString()}. If it already expires sooner, the sooner time wins.
+                Old key <code className="font-mono">{rotating.key_prefix}…</code> stops at {when(new Date(stopsAt(rotating, grace)).toISOString())}. If it already expires sooner, the sooner time wins.
               </p>
             )}
             <ErrorText>{error}</ErrorText>
