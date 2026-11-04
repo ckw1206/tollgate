@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, apiStream, fmtTokens, parseSSE } from './api'
+import { ApiError, apiStream, fmtTokens, parseSSE, setServerTimezone, when } from './api'
 
 // A text/event-stream Response whose body arrives in the given chunks.
 const sseResponse = (chunks: string[]) =>
@@ -201,5 +201,17 @@ describe('fmtTokens', () => {
     [1000000000, '1B'],
   ])('fmtTokens(%i) === %s', (n, want) => {
     expect(fmtTokens(n)).toBe(want)
+  })
+})
+
+describe('when', () => {
+  afterEach(() => setServerTimezone(undefined))
+  it('formats in the server timezone and names it', () => {
+    setServerTimezone('Asia/Tokyo')
+    expect(when('2026-11-04T22:06:30Z')).toMatch(/11\/5\/2026, 7:06:30\sAM GMT\+9/)
+  })
+  it('falls back to the browser zone when Intl rejects the server zone', () => {
+    setServerTimezone('Local')
+    expect(when('2026-11-04T22:06:30Z')).toMatch(/2026/)
   })
 })

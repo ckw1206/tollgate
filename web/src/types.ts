@@ -128,6 +128,8 @@ export interface SpendLog {
   key_id: string
   user_id: string
   model_name: string
+  provider: string
+  source: string // api | playground
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number

@@ -4,7 +4,7 @@ import { Area, AreaChart, CartesianGrid, Line, LineChart, ResponsiveContainer, T
 import { dash, fmtTokens, short, usd, when } from '../api'
 import { useAuth } from '../auth'
 import GetStarted from '../components/GetStarted'
-import { Badge, Banner, controlCls, ErrorText, PageHeader, Segmented, Skeleton, Sparkline, Table, useLoad } from '../components/ui'
+import { Badge, Banner, controlCls, DetailPanel, ErrorText, PageHeader, Segmented, Skeleton, Sparkline, Table, useLoad } from '../components/ui'
 import { fmtBucket, isDay, PER_UNIT, PER_WORD, RANGES, spanOf } from '../range'
 import type { Granularity, Range } from '../range'
 import type { ApiKey, Group, SpendLog, SpendRow, User } from '../types'
@@ -426,16 +426,23 @@ export default function Dashboard() {
       <Table
         rows={recentRows}
         empty="No requests in this period."
+        rowKey={(l) => String(l.id)}
+        rowLabel={(l) => `${l.model_name} at ${when(l.created_at)}`}
+        expand={(l) => <DetailPanel items={requestDetail(l)} />}
         cols={[
           { head: 'When', cell: (l) => when(l.created_at) },
           ...(can('spend:read_all') ? [{ head: 'Owner', cell: (l: SpendLog) => dash(l.owner_email) }] : []),
           {
             head: 'API key',
             cell: (l) => (
-              <span className="flex flex-col leading-[1.25]">
-                <span className="font-medium">{l.key_alias}</span>
-                <code className="font-mono text-[11px] text-muted-foreground">{l.key_prefix}…</code>
-              </span>
+              playground(l) ? (
+                <span className="font-medium">Playground</span>
+              ) : (
+                <span className="flex flex-col leading-[1.25]">
+                  <span className="font-medium">{l.key_alias}</span>
+                  <code className="font-mono text-[11px] text-muted-foreground">{l.key_prefix}…</code>
+                </span>
+              )
             ),
           },
           { head: 'Model', cell: (l) => l.model_name },
@@ -454,9 +461,7 @@ export default function Dashboard() {
           },
           { head: 'Cost', cell: (l) => usd(l.cost_nanos) },
           { head: 'Latency', cell: (l) => `${fmt.format(l.latency_ms)} ms` },
-          // A stream that fails after headers were sent is recorded as status "error" with http_status 200;
-          // a $0-model request whose client left is recorded with http_status 499.
-          { head: 'Status', cell: (l) => (l.status === 'success' ? <Badge tone="success">ok</Badge> : <Badge tone="error">{l.http_status && l.http_status !== 200 ? l.http_status : 'error'}</Badge>) },
+          { head: 'Status', cell: (l) => <StatusBadge l={l} /> },
         ]}
       />
       {!!recentRows?.length && requests !== null && (
@@ -466,4 +471,47 @@ export default function Dashboard() {
       )}
     </>
   )
+}
+
+// A client that leaves is a warning, not a gateway or provider failure. A $0 model's request is
+// then cancelled upstream and recorded as 499; a priced model's stream drains for billing and, its
+// headers already sent, is recorded as http_status 200 with the same "client disconnected" message.
+// Any other stream that fails after headers were sent is an error with http_status 200.
+const clientLeft = (l: SpendLog) => l.http_status === 499 || l.error_message.startsWith('client disconnected')
+
+function StatusBadge({ l }: { l: SpendLog }) {
+  if (l.status === 'success') return <Badge tone="success">ok</Badge>
+  const code = l.http_status && l.http_status !== 200 ? l.http_status : null
+  if (clientLeft(l)) return <Badge tone="warning">{code ?? 'client left'}</Badge>
+  return <Badge tone="error">{code ?? 'error'}</Badge>
+}
+
+// created_at is when the request started (latency later it was recorded), to the millisecond here.
+function utc(iso: string) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso || '—' : d.toISOString()
+}
+
+// Playground requests carry no key; the API fills in a placeholder alias and prefix.
+const playground = (l: SpendLog) => l.source === 'playground'
+
+function requestDetail(l: SpendLog) {
+  const n = (v: number) => fmt.format(v)
+  return [
+    { label: 'Started (server time)', value: when(l.created_at) },
+    { label: 'Started (UTC)', value: utc(l.created_at) },
+    { label: 'Log ID', value: l.id },
+    { label: 'Model', value: l.model_name },
+    { label: 'Provider', value: l.provider },
+    { label: 'API key', value: playground(l) ? 'None (playground)' : `${l.key_alias} (${l.key_prefix}…)` },
+    { label: 'Source', value: l.source },
+    { label: 'Input tokens', value: n(l.input_tokens) },
+    { label: 'Cache read tokens', value: n(l.cache_read_tokens) },
+    { label: 'Cache write tokens', value: n(l.cache_write_tokens) },
+    { label: 'Output tokens', value: n(l.output_tokens) },
+    { label: 'Cost', value: usd(l.cost_nanos) },
+    { label: 'Latency', value: `${n(l.latency_ms)} ms` },
+    { label: 'Status', value: `${l.status} · HTTP ${l.http_status}` },
+    { label: 'Error', value: l.error_message || '—', wide: true },
+  ]
 }
