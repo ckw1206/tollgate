@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -40,8 +41,17 @@ func scanUser(r scanner) (*User, error) {
 	return &u, notFound(err)
 }
 
+// PasswordCost is the bcrypt cost: 12 in production, bcrypt.MinCost under go test,
+// where cost 12 takes ~2s per hash or compare with -race and dominated CI time.
+var PasswordCost = func() int {
+	if testing.Testing() {
+		return bcrypt.MinCost
+	}
+	return 12
+}()
+
 func hashPassword(pw string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(pw), 12)
+	h, err := bcrypt.GenerateFromPassword([]byte(pw), PasswordCost)
 	return string(h), err
 }
 
