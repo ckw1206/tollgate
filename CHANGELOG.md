@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/ckw1206/tollgate/compare/v0.3.1...v0.4.0) (2026-11-04)
+
+
+### Features
+
+* **console:** expandable request rows; show 499 as a warning ([#56](https://github.com/ckw1206/tollgate/issues/56)) ([b74eae2](https://github.com/ckw1206/tollgate/commit/b74eae26e3e628f946765d9a049dd50769190102))
+
+
+### Fixes
+
+* **api:** correct reservation accounting found in review ([851775c](https://github.com/ckw1206/tollgate/commit/851775c1ddeae35474a704b252dd8f109b0e6585))
+* **api:** count in-flight requests against budgets and TPM ([227a958](https://github.com/ckw1206/tollgate/commit/227a958e13e9bb0984ea9db904314beede815ebb)), closes [#23](https://github.com/ckw1206/tollgate/issues/23) [#28](https://github.com/ckw1206/tollgate/issues/28)
+* **api:** count in-flight requests against budgets and TPM ([#23](https://github.com/ckw1206/tollgate/issues/23), [#28](https://github.com/ckw1206/tollgate/issues/28)) ([9200dcb](https://github.com/ckw1206/tollgate/commit/9200dcb9e7067a5d1ed145d65e2feea86b612e75))
+* **chat:** cancel upstream on client disconnect for $0 models ([fe997f5](https://github.com/ckw1206/tollgate/commit/fe997f548e06718b127f61f416bda010c42b3cb7))
+* **chat:** cancel upstream on client disconnect for $0 models ([#53](https://github.com/ckw1206/tollgate/issues/53)) ([fe997f5](https://github.com/ckw1206/tollgate/commit/fe997f548e06718b127f61f416bda010c42b3cb7))
+
 ## [0.3.1](https://github.com/ckw1206/tollgate/compare/v0.3.0...v0.3.1) (2026-10-24)
 
 
