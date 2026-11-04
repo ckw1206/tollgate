@@ -469,21 +469,34 @@ export default function Dashboard() {
   )
 }
 
-// A stream that fails after headers were sent is recorded as status "error" with http_status 200.
-// 499 = the client left (a $0-model request is then cancelled upstream): worth seeing, not a gateway
-// or provider failure, so it's a warning rather than an error.
+// A client that leaves is a warning, not a gateway or provider failure. A $0 model's request is
+// then cancelled upstream and recorded as 499; a priced model's stream drains for billing and, its
+// headers already sent, is recorded as http_status 200 with the same "client disconnected" message.
+// Any other stream that fails after headers were sent is an error with http_status 200.
+const clientLeft = (l: SpendLog) => l.http_status === 499 || l.error_message.startsWith('client disconnected')
+
 function StatusBadge({ l }: { l: SpendLog }) {
   if (l.status === 'success') return <Badge tone="success">ok</Badge>
-  return <Badge tone={l.http_status === 499 ? 'warning' : 'error'}>{l.http_status && l.http_status !== 200 ? l.http_status : 'error'}</Badge>
+  const code = l.http_status && l.http_status !== 200 ? l.http_status : null
+  if (clientLeft(l)) return <Badge tone="warning">{code ?? 'client left'}</Badge>
+  return <Badge tone="error">{code ?? 'error'}</Badge>
+}
+
+// created_at is when the request started (latency later it was recorded), to the millisecond here.
+function utc(iso: string) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso || '—' : d.toISOString()
 }
 
 function requestDetail(l: SpendLog) {
   const n = (v: number) => fmt.format(v)
   return [
-    { label: 'Time (UTC)', value: new Date(l.created_at).toISOString() },
-    { label: 'Request ID', value: l.id },
+    { label: 'Started (UTC)', value: utc(l.created_at) },
+    { label: 'Log ID', value: l.id },
     { label: 'Model', value: l.model_name },
+    { label: 'Provider', value: l.provider },
     { label: 'API key', value: `${l.key_alias} (${l.key_prefix}…)` },
+    { label: 'Source', value: l.source },
     { label: 'Input tokens', value: n(l.input_tokens) },
     { label: 'Cache read tokens', value: n(l.cache_read_tokens) },
     { label: 'Cache write tokens', value: n(l.cache_write_tokens) },
