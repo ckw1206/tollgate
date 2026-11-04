@@ -199,7 +199,15 @@ let serverTz: string | undefined
 export const setServerTimezone = (tz: string | undefined) => {
   serverTz = tz || undefined
 }
-export const when = (iso: string | null | undefined) =>
-  iso ? new Date(iso).toLocaleString(undefined, { timeZone: serverTz, timeZoneName: 'short' }) : '—'
+export const when = (iso: string | null | undefined) => {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  try {
+    return d.toLocaleString(undefined, { timeZone: serverTz, timeZoneName: 'short' })
+  } catch {
+    // A zone Go accepts but this browser's Intl doesn't (e.g. "Local"): browser zone, still labelled.
+    return d.toLocaleString(undefined, { timeZoneName: 'short' })
+  }
+}
 export const short = (id: string | null | undefined) => (id ? id.slice(0, 8) : '—')
 export const dash = (s: string | null | undefined) => (s ? s : '—')
