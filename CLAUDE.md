@@ -25,7 +25,7 @@ A bare `go test ./...` without `TOLLGATE_TEST_DATABASE_URL` **skips** the DB-bac
 
 - Console mutations require `Content-Type: application/json`, including DELETE, plus an `Origin` equal to `BASE_URL` when the browser sends one (`console/auth/csrf.go`). The SPA must always send the JSON content type.
 - Migrations: add a new numbered file `core/db/migrations/NNN_name.sql`. Never edit an applied one. They are tracked in `schema_migrations`, applied at startup, and each runs in a transaction.
-- Upstream calls use a context detached from the client, so a client disconnect mid-stream still gets billed. Don't tie upstream requests to `r.Context()`.
+- Upstream calls use a context detached from the client, so a client disconnect mid-stream still gets billed. Don't tie upstream requests to `r.Context()`. One exception: chat on a $0 model (`Prices.Free()`) uses `r.Context()`, so an abandoned request stops on the backend; its usage may be partial.
 - Streaming usage must be exact. For OpenAI, inject `stream_options.include_usage` and strip the usage chunk if the client didn't ask for it. Anthropic usage comes from `message_start`/`message_delta`, Gemini from `usageMetadata`.
 - Use stdlib `http.ServeMux` method patterns (`"POST /v1/..."`). No router dependency.
 - The server enforces what the console hides: a UI-only restriction (e.g. "rotated keys can't be edited") needs a handler check and a test too.

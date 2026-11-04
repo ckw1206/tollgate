@@ -55,7 +55,15 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 
 	start := s.Now()
 	rec := newRecord(info, m, start)
-	upCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), upstreamTimeout)
+	// Upstream is detached from the client so a disconnect still gets billed. A $0
+	// model has nothing to bill, so tie it to the client instead: an abandoned long
+	// prefill on a self-hosted backend otherwise keeps running and starves the
+	// client's own retry.
+	parent := context.WithoutCancel(r.Context())
+	if m.Prices.Free() {
+		parent = r.Context()
+	}
+	upCtx, cancel := context.WithTimeout(parent, upstreamTimeout)
 	defer cancel()
 
 	var u llm.Usage
@@ -80,8 +88,22 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 	fill(&rec, u, m, s.Now().Sub(start))
 	if err != nil {
 		rec.Status, rec.ErrorMessage = "error", err.Error()
-		rec.HTTPStatus = 200 // headers already sent for streams
-		if !req.Stream || !streamStarted(w) {
+		// Only a $0 model's upstream can be cancelled by the client (upCtx's
+		// parent); priced models keep main's labelling. Checked on upCtx, not err:
+		// providers flatten the cancel into an UpstreamError string.
+		clientGone := m.Prices.Free() && (errors.Is(upCtx.Err(), context.Canceled) || errors.Is(err, errClientGone))
+		switch {
+		case clientGone:
+			rec.ErrorMessage, rec.HTTPStatus = errClientGone.Error(), 499
+			if u.Tokens() == 0 {
+				// The cancel lost the usage chunk, but the backend still did the
+				// prefill: charge the input estimate to TPM so abandon+retry can't
+				// dodge the limit. rec keeps the honest 0.
+				u.Input = llm.EstimateInputTokens(req)
+			}
+		case req.Stream && streamStarted(w):
+			rec.HTTPStatus = 200 // headers already sent
+		default:
 			rec.HTTPStatus = writeUpstreamError(w, err)
 		}
 	}
@@ -89,13 +111,16 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 	s.finish(info, resv, rec, u)
 }
 
-// stream proxies SSE. If the client goes away, it stops writing but lets the
-// provider drain upstream (upCtx is detached from the client) so usage is exact.
+var errClientGone = errors.New("client disconnected mid-stream")
+
+// stream proxies SSE. If the client goes away, it stops writing; for a priced
+// model the provider drains upstream (upCtx is detached from the client) so
+// usage is exact, for a $0 model upCtx is cancelled and upstream stops.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request, upCtx context.Context, m *llm.Model, p llm.Provider, req *llm.ChatRequest) (llm.Usage, error) {
 	sw := &streamWriter{w: w}
 	u, err := p.ChatStream(upCtx, m, req, sw.write)
 	if sw.gone {
-		return u, errors.New("client disconnected mid-stream")
+		return u, errClientGone
 	}
 	if err != nil {
 		if sw.started {

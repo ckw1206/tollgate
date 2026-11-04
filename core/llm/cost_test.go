@@ -28,3 +28,22 @@ func TestFormatUSD(t *testing.T) {
 		t.Fatalf("got %s", s)
 	}
 }
+
+func TestPricesFree(t *testing.T) {
+	zero, one := int64(0), int64(1)
+	for _, tc := range []struct {
+		p    Prices
+		want bool
+	}{
+		{Prices{}, true},
+		{Prices{CacheReadMicros: &zero, CacheWriteMicros: &zero}, true},
+		{Prices{InputMicros: 1}, false},
+		{Prices{OutputMicros: 1}, false},
+		{Prices{CacheReadMicros: &one}, false},
+		{Prices{CacheWriteMicros: &one}, false},
+	} {
+		if got := tc.p.Free(); got != tc.want {
+			t.Errorf("%+v: Free()=%v, want %v", tc.p, got, tc.want)
+		}
+	}
+}

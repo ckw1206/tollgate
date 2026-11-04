@@ -19,6 +19,12 @@ type Prices struct {
 	CacheReadMicros, CacheWriteMicros *int64
 }
 
+// Free reports whether every price is zero (e.g. a self-hosted model): nothing to bill.
+func (p Prices) Free() bool {
+	return p.InputMicros == 0 && p.OutputMicros == 0 &&
+		(p.CacheReadMicros == nil || *p.CacheReadMicros == 0) && (p.CacheWriteMicros == nil || *p.CacheWriteMicros == 0)
+}
+
 type Extra struct {
 	VertexProject  string            `json:"vertex_project"`
 	VertexLocation string            `json:"vertex_location"`

@@ -20,8 +20,9 @@ type Server struct {
 
 const maxBody = 20 << 20
 
-// Upstream calls get their own deadline and survive client disconnects, so
-// streams can be drained for exact usage.
+// Upstream calls get their own deadline. For priced models they survive client
+// disconnects so streams can be drained for exact usage; $0 chat models are
+// cancelled with the client (see ChatAs).
 const upstreamTimeout = 10 * time.Minute
 
 func (s *Server) Register(mux *http.ServeMux) {
