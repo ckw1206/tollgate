@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
-import { api } from './api'
+import { api, setServerTimezone } from './api'
 import type { Me } from './types'
 
 interface AuthCtx {
@@ -30,6 +30,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.assign('/login')
   }
   if (me === undefined) return null
+  setServerTimezone(me?.server.timezone)
   const can = (perm: string) => !!me?.permissions.includes(perm)
   return <Ctx.Provider value={{ me, can, refresh, logout }}>{children}</Ctx.Provider>
 }
