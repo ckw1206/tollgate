@@ -454,7 +454,8 @@ export default function Dashboard() {
           },
           { head: 'Cost', cell: (l) => usd(l.cost_nanos) },
           { head: 'Latency', cell: (l) => `${fmt.format(l.latency_ms)} ms` },
-          // A stream that fails after headers were sent is recorded as status "error" with http_status 200.
+          // A stream that fails after headers were sent is recorded as status "error" with http_status 200;
+          // a $0-model request whose client left is recorded with http_status 499.
           { head: 'Status', cell: (l) => (l.status === 'success' ? <Badge tone="success">ok</Badge> : <Badge tone="error">{l.http_status && l.http_status !== 200 ? l.http_status : 'error'}</Badge>) },
         ]}
       />

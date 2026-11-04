@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,7 +30,13 @@ type fakeProvider struct {
 	during func(ctx context.Context) // runs mid-stream with the upstream ctx
 }
 
-func (f *fakeProvider) Chat(context.Context, *llm.Model, *llm.ChatRequest) (*llm.Result, error) {
+func (f *fakeProvider) Chat(ctx context.Context, _ *llm.Model, _ *llm.ChatRequest) (*llm.Result, error) {
+	if f.during != nil {
+		f.during(ctx)
+		if err := ctx.Err(); err != nil {
+			return nil, &llm.UpstreamError{Status: 502, Message: err.Error()} // like post(): the cancel is flattened
+		}
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -39,8 +46,8 @@ func (f *fakeProvider) Chat(context.Context, *llm.Model, *llm.ChatRequest) (*llm
 func (f *fakeProvider) ChatStream(ctx context.Context, _ *llm.Model, _ *llm.ChatRequest, emit func([]byte) error) (llm.Usage, error) {
 	if f.during != nil {
 		f.during(ctx)
-		if err := ctx.Err(); err != nil { // like a real provider: a cancelled ctx aborts the request
-			return llm.Usage{}, err
+		if err := ctx.Err(); err != nil { // like post(): a cancelled ctx aborts, flattened to an UpstreamError
+			return llm.Usage{}, &llm.UpstreamError{Status: 502, Message: err.Error()}
 		}
 	}
 	for _, c := range f.chunks {
@@ -269,27 +276,46 @@ func TestChat_StreamClientDisconnect_StillRecords(t *testing.T) {
 }
 
 // A client that leaves (e.g. during a long prefill, before any byte is written)
-// cancels upstream for a $0 model only; priced models still drain for billing.
-func TestChat_ClientGone_CancelsUpstreamOnlyForFreeModels(t *testing.T) {
-	for _, tc := range []struct {
-		model      string
-		wantCancel bool
-	}{{"slow", true}, {"fast", false}} {
-		e := newEnv(t, repo.KeyInput{})
-		ctx, leave := context.WithCancel(context.Background())
-		var upErr error
-		e.prov.during = func(up context.Context) { leave(); upErr = up.Err() }
-		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"`+tc.model+`","stream":true,"messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
-		r.Header.Set("Authorization", "Bearer "+e.raw)
-		e.h.ServeHTTP(httptest.NewRecorder(), r)
-		if (upErr != nil) != tc.wantCancel {
-			t.Fatalf("%s: upstream err=%v, want cancelled=%v", tc.model, upErr, tc.wantCancel)
-		}
-		if len(e.records) != 1 {
-			t.Fatalf("%s: records=%d", tc.model, len(e.records))
-		}
-		if got := e.records[0]; tc.wantCancel && (got.HTTPStatus != 499 || !strings.Contains(got.ErrorMessage, "client disconnected")) {
-			t.Fatalf("%s: record=%+v", tc.model, got)
+// cancels upstream for a $0 model only: recorded 499 and charged its input
+// estimate to TPM. Priced models drain and keep main's labelling, including a
+// real upstream error that lands after the client left.
+func TestChat_ClientGone(t *testing.T) {
+	for _, stream := range []bool{true, false} {
+		for _, tc := range []struct {
+			model      string
+			upErr      error
+			wantCancel bool
+			wantStatus int
+		}{
+			{"slow", nil, true, 499},
+			{"fast", nil, false, 200},
+			{"fast", &llm.UpstreamError{Status: 503, Message: "overloaded"}, false, 503},
+		} {
+			name := fmt.Sprintf("%s/stream=%v/err=%v", tc.model, stream, tc.upErr)
+			limit := int32(1_000_000)
+			e := newEnv(t, repo.KeyInput{TPMLimit: &limit})
+			e.prov.err = tc.upErr
+			ctx, leave := context.WithCancel(context.Background())
+			var upCtxErr error
+			e.prov.during = func(up context.Context) { leave(); upCtxErr = up.Err() }
+			body := fmt.Sprintf(`{"model":%q,"stream":%v,"messages":[{"role":"user","content":"hi"}]}`, tc.model, stream)
+			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)).WithContext(ctx)
+			r.Header.Set("Authorization", "Bearer "+e.raw)
+			e.h.ServeHTTP(httptest.NewRecorder(), r)
+			if (upCtxErr != nil) != tc.wantCancel {
+				t.Fatalf("%s: upstream ctx err=%v, want cancelled=%v", name, upCtxErr, tc.wantCancel)
+			}
+			if len(e.records) != 1 {
+				t.Fatalf("%s: records=%d", name, len(e.records))
+			}
+			got := e.records[0]
+			if got.HTTPStatus != tc.wantStatus || tc.wantCancel != strings.Contains(got.ErrorMessage, "client disconnected") {
+				t.Fatalf("%s: record=%+v", name, got)
+			}
+			// An upstream error carries no usage (same as main), so TPM is only asserted otherwise.
+			if tpm, _ := e.srv.Cache.TPM(context.Background(), "key", e.key.ID, time.Now()); tc.upErr == nil && tpm <= 0 {
+				t.Fatalf("%s: TPM not charged (%d)", name, tpm)
+			}
 		}
 	}
 }
