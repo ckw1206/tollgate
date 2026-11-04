@@ -14,7 +14,7 @@ import (
 
 // dummyHash makes unknown-email logins as slow as wrong-password ones, so
 // response time doesn't reveal which emails have accounts.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("tollgate-dummy-password"), 12)
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("tollgate-dummy-password"), repo.PasswordCost)
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Email, Password string }
