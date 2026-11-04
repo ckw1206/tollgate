@@ -26,6 +26,7 @@ type fakeProvider struct {
 	usage  llm.Usage
 	chunks []string
 	err    error
+	during func(ctx context.Context) // runs mid-stream with the upstream ctx
 }
 
 func (f *fakeProvider) Chat(context.Context, *llm.Model, *llm.ChatRequest) (*llm.Result, error) {
@@ -35,7 +36,13 @@ func (f *fakeProvider) Chat(context.Context, *llm.Model, *llm.ChatRequest) (*llm
 	return &llm.Result{Body: []byte(`{"id":"x","choices":[]}`), Usage: f.usage}, nil
 }
 
-func (f *fakeProvider) ChatStream(_ context.Context, _ *llm.Model, _ *llm.ChatRequest, emit func([]byte) error) (llm.Usage, error) {
+func (f *fakeProvider) ChatStream(ctx context.Context, _ *llm.Model, _ *llm.ChatRequest, emit func([]byte) error) (llm.Usage, error) {
+	if f.during != nil {
+		f.during(ctx)
+		if err := ctx.Err(); err != nil { // like a real provider: a cancelled ctx aborts the request
+			return llm.Usage{}, err
+		}
+	}
 	for _, c := range f.chunks {
 		emit([]byte(c)) // like real providers, keep going; the server decides what to do with write errors
 	}
@@ -258,6 +265,32 @@ func TestChat_StreamClientDisconnect_StillRecords(t *testing.T) {
 	got := e.records[0]
 	if got.CostNanos != 7_500_000 || got.Status != "error" || !strings.Contains(got.ErrorMessage, "client disconnected") {
 		t.Fatalf("record=%+v", got)
+	}
+}
+
+// A client that leaves (e.g. during a long prefill, before any byte is written)
+// cancels upstream for a $0 model only; priced models still drain for billing.
+func TestChat_ClientGone_CancelsUpstreamOnlyForFreeModels(t *testing.T) {
+	for _, tc := range []struct {
+		model      string
+		wantCancel bool
+	}{{"slow", true}, {"fast", false}} {
+		e := newEnv(t, repo.KeyInput{})
+		ctx, leave := context.WithCancel(context.Background())
+		var upErr error
+		e.prov.during = func(up context.Context) { leave(); upErr = up.Err() }
+		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"`+tc.model+`","stream":true,"messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
+		r.Header.Set("Authorization", "Bearer "+e.raw)
+		e.h.ServeHTTP(httptest.NewRecorder(), r)
+		if (upErr != nil) != tc.wantCancel {
+			t.Fatalf("%s: upstream err=%v, want cancelled=%v", tc.model, upErr, tc.wantCancel)
+		}
+		if len(e.records) != 1 {
+			t.Fatalf("%s: records=%d", tc.model, len(e.records))
+		}
+		if got := e.records[0]; tc.wantCancel && (got.HTTPStatus != 499 || !strings.Contains(got.ErrorMessage, "client disconnected")) {
+			t.Fatalf("%s: record=%+v", tc.model, got)
+		}
 	}
 }
 

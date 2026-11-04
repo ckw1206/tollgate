@@ -55,7 +55,15 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 
 	start := s.Now()
 	rec := newRecord(info, m, start)
-	upCtx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), upstreamTimeout)
+	// Upstream is detached from the client so a disconnect still gets billed. A $0
+	// model has nothing to bill, so tie it to the client instead: an abandoned long
+	// prefill on a self-hosted backend otherwise keeps running and starves the
+	// client's own retry.
+	parent := context.WithoutCancel(r.Context())
+	if m.Prices.Free() {
+		parent = r.Context()
+	}
+	upCtx, cancel := context.WithTimeout(parent, upstreamTimeout)
 	defer cancel()
 
 	var u llm.Usage
@@ -80,8 +88,10 @@ func (s *Server) ChatAs(w http.ResponseWriter, r *http.Request, info *repo.AuthI
 	fill(&rec, u, m, s.Now().Sub(start))
 	if err != nil {
 		rec.Status, rec.ErrorMessage = "error", err.Error()
-		rec.HTTPStatus = 200 // headers already sent for streams
-		if !req.Stream || !streamStarted(w) {
+		rec.HTTPStatus = 200          // headers already sent for streams
+		if r.Context().Err() != nil { // client left; only $0 models cancel upstream on that
+			rec.ErrorMessage, rec.HTTPStatus = "client disconnected: "+err.Error(), 499
+		} else if !req.Stream || !streamStarted(w) {
 			rec.HTTPStatus = writeUpstreamError(w, err)
 		}
 	}
