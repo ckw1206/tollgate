@@ -9,7 +9,7 @@ Requires Docker.
 ```bash
 cp .env.example .env
 sed -i.bak "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$(openssl rand -hex 32)/" .env && rm .env.bak   # GNU and BSD/macOS sed
-VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose up -d --build
+docker compose up -d   # pulls ghcr.io/ckw1206/tollgate; pin TOLLGATE_VERSION in .env
 until curl -sf localhost:4000/health >/dev/null; do sleep 1; done
 docker compose logs tollgate | grep 'First-run setup'   # one-time link to create the first admin
 ```
@@ -18,7 +18,7 @@ Open that link (it pre-fills a setup token that changes on every restart until a
 
 Over plain `http` on anything other than `localhost` (and in Safari even on localhost), browsers drop the `Secure` session cookie and login appears to do nothing. Set `COOKIE_INSECURE=true` in `.env` for local testing only. In production, serve over HTTPS and leave it `false`.
 
-`make image` builds a tagged image (`tollgate:<tag or dev>`) with the version and commit shown in the console footer. Without Docker: `make build` (needs Go 1.26 and Node 24), then `set -a; . ./.env; set +a; ./tollgate`.
+To run the gateway built from this checkout instead, add the dev overlay: `VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`. `make image` builds a tagged image (`tollgate:<tag or dev>`) with the version and commit shown in the console footer. Without Docker: `make build` (needs Go 1.26 and Node 24), then `set -a; . ./.env; set +a; ./tollgate`.
 
 Then, as admin:
 

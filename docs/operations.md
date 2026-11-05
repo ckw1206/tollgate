@@ -40,6 +40,14 @@ While the users table is empty, `serve` generates a one-time setup token at star
 
 ## Upgrades and migrations
 
+The bundled `docker-compose.yml` runs the released image `ghcr.io/ckw1206/tollgate:${TOLLGATE_VERSION}` (default `latest`). Pin `TOLLGATE_VERSION` in `.env` to a release tag. To upgrade, back up, set the new tag, then:
+
+```bash
+docker compose pull tollgate && docker compose up -d tollgate
+```
+
+The version and commit are in the console footer. `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` builds from the checkout instead (image `tollgate:dev`).
+
 Postgres 15 or later is required (the bundled compose file runs 16). Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
 
 ### Upgrading from v0.1.0: endpoint precedence changed
