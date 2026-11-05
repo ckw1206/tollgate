@@ -91,6 +91,17 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	}
 	defer tx.Rollback(ctx)
 
+	// The timezone is read first, under FOR SHARE, so this batch and a settings
+	// save serialize: a save (FOR UPDATE, see UpdateSettings) waits for batches
+	// in flight, and a batch that starts during a save sees the new zone and the
+	// rescheduled windows. Both take the settings row before any key or group
+	// row, so the two never deadlock.
+	var tz string
+	if err := tx.QueryRow(ctx, `SELECT timezone FROM server_settings WHERE id=1 FOR SHARE`).Scan(&tz); err != nil {
+		return nil, err
+	}
+	loc := serverTimezone(tz)
+
 	rows := make([][]any, len(recs))
 	keySet, groupSet := map[string]bool{}, map[string]bool{}
 	for i, r := range recs {
@@ -120,12 +131,6 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	if err != nil {
 		return nil, err
 	}
-
-	st, err := s.GetSettings(ctx)
-	if err != nil {
-		return nil, err
-	}
-	loc := serverTimezone(st.Timezone)
 
 	now := time.Now()
 	keyCost := inWindowCosts(recs, keyLims, func(r SpendRecord) string { return r.KeyID }, now, loc)

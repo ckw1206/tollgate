@@ -102,8 +102,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	before, _ := s.Store.GetSettings(r.Context())
 	after, err := s.Store.UpdateSettings(r.Context(), in)
+	if errors.Is(err, repo.ErrInvalidTimezone) {
+		badRequest(w, err.Error())
+		return
+	}
 	if err != nil {
-		badRequest(w, err.Error()) // only failure mode besides DB down is an invalid timezone
+		storeErr(w, err) // the handler already validated the rest; a DB error here is a 500
 		return
 	}
 	s.audit(r, "settings.update", "server_settings", "1", auditSettings(before), auditSettings(after))
