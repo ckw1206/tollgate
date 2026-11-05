@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, usd } from '../api'
 import type { GateInfo } from '../types'
+import { UsageMeter } from './ui'
 
 // The one-line status bar above every console page header: gateway health,
 // provider uptime, request rate, latency and the caller's budget meter.
@@ -49,9 +50,6 @@ export function useGate() {
   return { health, gate }
 }
 
-// Meter colour: primary → warning-foreground at >= 80% → destructive at 100%.
-const meterColor = (pct: number) => (pct >= 100 ? 'var(--destructive)' : pct >= 80 ? 'var(--warning-foreground)' : 'var(--primary)')
-
 export default function GateBar() {
   const { health, gate } = useGate()
   const b = gate?.budget ?? null
@@ -82,9 +80,7 @@ export default function GateBar() {
             <span className="hidden md:inline">
               {b.type === 'daily' ? 'Your budget today' : 'Your budget'} {usd(used)} / {usd(b.budget_nanos)}
             </span>
-            <span aria-hidden className="h-1 overflow-hidden rounded-sm bg-muted" style={{ width: 64 }}>
-              <span className="block h-full" style={{ width: `${pct}%`, background: meterColor(pct) }} />
-            </span>
+            <UsageMeter pct={pct} />
           </span>
         )}
       </div>

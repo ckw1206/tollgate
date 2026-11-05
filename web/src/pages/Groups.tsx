@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from 'react'
 import { api, ApiError } from '../api'
 import { useAuth } from '../auth'
-import { budgetText, LimitsFields, limitsPayload, limitsState, limitText, type LimitsState } from '../components/LimitsFields'
+import { BudgetCell, LimitsFields, limitsPayload, limitsState, limitText, type LimitsState } from '../components/LimitsFields'
 import { Button, ErrorText, Field, inputCls, Modal, ModalFooter, MultiSelect, PageHeader, RowActions, rowsOf, Table, useLoad } from '../components/ui'
 import { PEOPLE_TABS } from '../Layout'
 import type { Affected, Group, Model } from '../types'
@@ -66,7 +66,7 @@ export default function Groups() {
         cols={[
           { head: 'Name', cell: (g) => g.name },
           { head: 'Members', cell: (g) => g.members },
-          { head: 'Budget (USD)', cell: (g) => budgetText(g) },
+          { head: 'Budget (USD)', cell: (g) => <BudgetCell l={g} /> },
           { head: 'RPM / TPM', cell: (g) => `${limitText(g.rpm_limit)} / ${limitText(g.tpm_limit)}` },
           { head: 'Allowed models',
             cell: (g) => {

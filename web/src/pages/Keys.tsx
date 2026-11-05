@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api, short, when } from '../api'
 import { useAuth } from '../auth'
 import KeyDialog from '../components/KeyDialog'
-import { budgetText, limitText } from '../components/LimitsFields'
+import { BudgetCell, limitText } from '../components/LimitsFields'
 import {
   Badge, Button, ConfirmDialog, DetailPanel, ErrorText, Modal, ModalFooter, PageHeader, RowActions, rowsOf, SecretDialog,
   Segmented, Table, useLoad, type Tone,
@@ -113,7 +113,7 @@ export default function Keys() {
           <DetailPanel
             items={[
               { label: 'Group', value: groupName(k.group_id) },
-              { label: 'Budget', value: budgetText(k) },
+              { label: 'Budget', value: <BudgetCell l={k} /> },
               { label: 'RPM / TPM', value: `${limitText(k.rpm_limit)} / ${limitText(k.tpm_limit)}` },
               { label: 'Allowed models', value: k.models.length ? k.models.join(', ') : 'all' },
               { label: 'Expires', value: k.expires_at ? when(k.expires_at) : 'never' },
@@ -126,6 +126,7 @@ export default function Keys() {
           { head: 'Alias', cell: (k) => <div>{k.alias}{expiringSoon(k)}</div> },
           { head: 'Key', cell: (k) => <code className="font-mono text-xs">{k.key_prefix}…</code> },
           ...(can('keys:read_all') ? [{ head: 'Owner', cell: (k: ApiKey) => email(k.user_id) }] : []),
+          { head: 'Budget (USD)', cell: (k) => <BudgetCell l={k} /> },
           { head: 'Last used', cell: (k) => when(k.last_used_at) },
           { head: 'Status', cell: (k) => <Badge tone={tone[keyStatus(k)]}>{keyStatus(k)}</Badge> },
         ]}

@@ -300,6 +300,19 @@ export function Sparkline({ points, tone }: { points: number[]; tone: 'primary' 
   )
 }
 
+// UsageMeter: a thin usage bar (GateBar, Keys, Groups). Colour: primary →
+// warning-foreground at >= 80% → destructive at >= 100%. pct may exceed 100;
+// the fill is clamped.
+export const meterColor = (pct: number) => (pct >= 100 ? 'var(--destructive)' : pct >= 80 ? 'var(--warning-foreground)' : 'var(--primary)')
+
+export function UsageMeter({ pct, width = 64 }: { pct: number; width?: number }) {
+  return (
+    <span aria-hidden className="inline-block h-1 shrink-0 overflow-hidden rounded-sm bg-muted align-middle" style={{ width }}>
+      <span className="block h-full" style={{ width: `${Math.max(0, Math.min(pct, 100))}%`, background: meterColor(pct) }} />
+    </span>
+  )
+}
+
 // RowActions: the last, unlabeled, right-aligned column. Small buttons, 8px apart.
 export function RowActions({ children }: { children: ReactNode }) {
   return <div className="flex justify-end gap-2">{children}</div>

@@ -1,7 +1,8 @@
 import type { ChangeEvent } from 'react'
-import { fromNanos, num, toNanos, usd } from '../api'
+import { fromNanos, num, toNanos, usd, whenShort } from '../api'
+import { budgetUsage } from '../budget'
 import type { BudgetType, Limits } from '../types'
-import { Field, inputCls } from './ui'
+import { Field, inputCls, UsageMeter } from './ui'
 
 export interface LimitsState { budget_type: BudgetType; budget: string; rpm: string; tpm: string }
 
@@ -45,16 +46,39 @@ export function LimitsFields({ value, onChange }: { value: LimitsState; onChange
   )
 }
 
-// budgetText: "12.40 / 50.00 monthly" or "Unlimited". Counts in-flight
-// reservations as used (#23), so the figure matches what the gateway enforces;
-// a non-zero reserve is marked so it is clear the number can fall back down
-// once those requests settle.
+// budgetText: "12.40 / 50.00 monthly" or "Unlimited". The used figure is
+// budgetUsage's: in-flight reservations count as used (#23), so it matches what
+// the gateway enforces, and a non-zero reserve is marked so it is clear the
+// number can fall back down once those requests settle.
 export function budgetText(l: Limits) {
-  if (l.budget_type === 'unlimited') return 'Unlimited'
+  const u = budgetUsage(l)
+  if (!u) return 'Unlimited'
   const reserved = l.reserved_nanos ?? 0
-  const used = l.spend_nanos + reserved
   const suffix = reserved > 0 ? ` (+${usd(reserved).slice(1)} in flight)` : ''
-  return `${usd(used).slice(1)} / ${usd(l.budget_nanos).slice(1)} ${l.budget_type}${suffix}`
+  return `${usd(u.usedNanos).slice(1)} / ${usd(l.budget_nanos).slice(1)} ${l.budget_type}${suffix}`
+}
+
+// BudgetCell: "12.40 / 50.00 monthly" over a usage meter, the percent used,
+// anything in flight and, for daily/monthly, when the window resets (server
+// timezone). At or over the cap the percent is marked, since the gateway is
+// refusing paid requests. A key row shows the key's own budget only; its
+// billing group's cap applies on top.
+export function BudgetCell({ l }: { l: Limits }) {
+  const u = budgetUsage(l)
+  if (!u) return <>Unlimited</>
+  const reserved = l.reserved_nanos ?? 0
+  return (
+    <div>
+      <div>{usd(u.usedNanos).slice(1)} / {usd(l.budget_nanos).slice(1)} {l.budget_type}</div>
+      <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+        <UsageMeter pct={u.pct} />
+        <span className={u.over ? 'font-medium text-destructive' : ''}>{u.pct}%{u.over && ' · over budget'}</span>
+        {reserved > 0 && <span>· +{usd(reserved).slice(1)} in flight</span>}
+        {u.resetAt && <span>· resets {whenShort(u.resetAt)}</span>}
+        {u.expired && <span>· new window</span>}
+      </div>
+    </div>
+  )
 }
 
 export const limitText = (n: number | null) => (n == null ? '∞' : String(n))
