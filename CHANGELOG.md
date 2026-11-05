@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/ckw1206/tollgate/compare/v0.5.0...v0.5.1) (2026-11-05)
+
+
+### Dependencies
+
+* **compose:** run the released GHCR image; build locally via the dev overlay ([#65](https://github.com/ckw1206/tollgate/issues/65)) ([1110222](https://github.com/ckw1206/tollgate/commit/1110222c2a63d0230618ba181c4059de1f1611ab))
+* **deps:** bump the npm group across 1 directory with 2 updates ([#52](https://github.com/ckw1206/tollgate/issues/52)) ([8dd8bd5](https://github.com/ckw1206/tollgate/commit/8dd8bd5b11c79a2a73aa86535e891f5e663cd9a0))
+
 ## [0.5.0](https://github.com/ckw1206/tollgate/compare/v0.4.0...v0.5.0) (2026-11-05)
 
 
