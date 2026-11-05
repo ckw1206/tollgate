@@ -209,5 +209,16 @@ export const when = (iso: string | null | undefined) => {
     return d.toLocaleString(undefined, { timeZoneName: 'short' })
   }
 }
+// whenShort: "Dec 1, 00:00 GMT+8" — when() without the year and seconds, for table cells.
+export const whenShort = (iso: string | null | undefined) => {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short' }
+  try {
+    return d.toLocaleString(undefined, { ...opts, timeZone: serverTz })
+  } catch {
+    return d.toLocaleString(undefined, opts)
+  }
+}
 export const short = (id: string | null | undefined) => (id ? id.slice(0, 8) : '—')
 export const dash = (s: string | null | undefined) => (s ? s : '—')
