@@ -82,3 +82,5 @@ Terminate TLS in front of Tollgate. Then:
 - set `BASE_URL` to the public `https://` origin, or console logins fail the CSRF Origin check;
 - set `TRUSTED_PROXIES` to the proxy's CIDR, or the audit log and login throttling see the proxy's IP for every user;
 - don't buffer `text/event-stream` responses, or streaming arrives all at once (nginx: `proxy_buffering off`).
+
+A stream that stays silent for 20 s, such as a long prefill before the first token, gets a `: keepalive` SSE comment, which clients ignore. The first one also sends the response headers, so a proxy read timeout of 30 s or more (nginx defaults to 60 s, Cloudflare allows 100 s) doesn't cut long-context requests. Once a stream has started, an upstream error arrives as an SSE `error` event and is logged with HTTP 200. Non-streaming requests send nothing until the upstream answers, so give them a proxy read timeout longer than your slowest request.

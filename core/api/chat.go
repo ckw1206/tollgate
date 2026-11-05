@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"tollgate/core/db/repo"
@@ -118,7 +119,9 @@ var errClientGone = errors.New("client disconnected mid-stream")
 // usage is exact, for a $0 model upCtx is cancelled and upstream stops.
 func (s *Server) stream(w http.ResponseWriter, r *http.Request, upCtx context.Context, m *llm.Model, p llm.Provider, req *llm.ChatRequest) (llm.Usage, error) {
 	sw := &streamWriter{w: w}
+	stop := sw.keepalive(s.keepalive())
 	u, err := p.ChatStream(upCtx, m, req, sw.write)
+	stop()
 	if sw.gone {
 		return u, errClientGone
 	}
@@ -135,9 +138,50 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request, upCtx context.Co
 	return u, nil
 }
 
+// streamWriter is written by the provider (write) and by the keepalive
+// goroutine, so both go through mu.
 type streamWriter struct {
+	mu            sync.Mutex
 	w             http.ResponseWriter
 	started, gone bool
+	last          time.Time // last successful write, for keepalive
+}
+
+// keepalive sends an SSE comment whenever the stream has been silent for every,
+// so a reverse proxy's read timeout doesn't cut a request whose first token is
+// slow (a long prefill on a self-hosted backend). The first comment also sends
+// the headers: an upstream failure after that becomes an SSE error event with
+// HTTP 200, while one within every still gets its real status code. stop waits
+// for the goroutine, so nothing writes to w after the handler returns.
+func (sw *streamWriter) keepalive(every time.Duration) (stop func()) {
+	sw.last = time.Now()
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		t := time.NewTimer(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+			}
+			sw.mu.Lock()
+			next := every
+			if idle := time.Since(sw.last); idle >= every {
+				sw.send([]byte(": keepalive\n\n"))
+			} else {
+				next = every - idle
+			}
+			gone := sw.gone
+			sw.mu.Unlock()
+			if gone {
+				return
+			}
+			t.Reset(next)
+		}
+	}()
+	return func() { close(done); <-exited }
 }
 
 func (sw *streamWriter) start() {
@@ -161,16 +205,24 @@ func (sw *streamWriter) flush() {
 // write never returns an error: after a client disconnect it silently discards,
 // so the provider keeps reading upstream to the end.
 func (sw *streamWriter) write(chunk []byte) error {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	sw.send(fmt.Appendf(nil, "data: %s\n\n", chunk))
+	return nil
+}
+
+// send writes one SSE block, starting the stream if needed. Caller holds mu.
+func (sw *streamWriter) send(b []byte) {
 	if sw.gone {
-		return nil
+		return
 	}
 	sw.start()
-	if _, err := fmt.Fprintf(sw.w, "data: %s\n\n", chunk); err != nil {
+	if _, err := sw.w.Write(b); err != nil {
 		sw.gone = true
-		return nil
+		return
 	}
 	sw.flush()
-	return nil
+	sw.last = time.Now()
 }
 
 // streamStarted reports whether headers went out (so a JSON error can't be written).

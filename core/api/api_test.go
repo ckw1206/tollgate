@@ -245,6 +245,82 @@ func TestChat_Stream(t *testing.T) {
 	}
 }
 
+const streamBody = `{"model":"fast","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+
+// A slow first token (a long prefill) must not leave the connection silent:
+// once Keepalive passes with nothing sent, the stream starts and SSE comments go
+// out, so a reverse proxy's read timeout doesn't cut the request.
+func TestChat_StreamKeepalive_SlowFirstToken(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	e.srv.Keepalive = 10 * time.Millisecond
+	e.prov.chunks = []string{`{"a":1}`}
+	e.prov.during = func(context.Context) { time.Sleep(60 * time.Millisecond) }
+	w := e.do("POST", "/v1/chat/completions", e.raw, streamBody)
+	body := w.Body.String()
+	if w.Code != 200 || w.Header().Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("code=%d ct=%q", w.Code, w.Header().Get("Content-Type"))
+	}
+	if !strings.HasPrefix(body, ": keepalive\n\n") || strings.Count(body, ": keepalive\n\n") < 2 ||
+		!strings.HasSuffix(body, "data: {\"a\":1}\n\ndata: [DONE]\n\n") {
+		t.Fatalf("body=%q", body)
+	}
+	if len(e.records) != 1 || e.records[0].Status != "success" || e.records[0].HTTPStatus != 200 || e.records[0].CostNanos != 7_500_000 {
+		t.Fatalf("records=%+v", e.records)
+	}
+}
+
+// An upstream error after keepalives went out can't change the status line: it
+// goes out as an SSE error event and is recorded with HTTP 200, like any other
+// mid-stream failure.
+func TestChat_StreamKeepalive_ErrorAfterStart(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	e.srv.Keepalive = 10 * time.Millisecond
+	e.prov.usage = llm.Usage{}
+	e.prov.err = &llm.UpstreamError{Status: 503, Message: "overloaded"}
+	e.prov.during = func(context.Context) { time.Sleep(40 * time.Millisecond) }
+	w := e.do("POST", "/v1/chat/completions", e.raw, streamBody)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.HasPrefix(body, ": keepalive\n\n") || !strings.Contains(body, `"code":"upstream_error"`) || strings.Contains(body, "[DONE]") {
+		t.Fatalf("code=%d body=%q", w.Code, body)
+	}
+	if len(e.records) != 1 || e.records[0].Status != "error" || e.records[0].HTTPStatus != 200 || !strings.Contains(e.records[0].ErrorMessage, "overloaded") {
+		t.Fatalf("records=%+v", e.records)
+	}
+}
+
+// A fast failure still gets its real status code: nothing is written before
+// the first keepalive is due.
+func TestChat_StreamFastError_KeepsStatus(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	e.prov.err = &llm.UpstreamError{Status: 503, Message: "overloaded"}
+	w := e.do("POST", "/v1/chat/completions", e.raw, streamBody)
+	if w.Code != 503 || errCode(t, w) != "upstream_error" || strings.Contains(w.Body.String(), "keepalive") {
+		t.Fatalf("code=%d body=%q", w.Code, w.Body)
+	}
+}
+
+// A client that drops while only keepalives have been sent is detected by the
+// failed keepalive write; a priced model still drains and bills.
+func TestChat_StreamKeepalive_ClientGone(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	e.srv.Keepalive = 10 * time.Millisecond
+	e.prov.chunks = []string{`{"a":1}`}
+	e.prov.during = func(context.Context) { time.Sleep(60 * time.Millisecond) }
+	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(streamBody))
+	r.Header.Set("Authorization", "Bearer "+e.raw)
+	w := &failingWriter{ResponseRecorder: httptest.NewRecorder()}
+	e.h.ServeHTTP(w, r)
+	if body := w.Body.String(); body != ": keepalive\n\n" {
+		t.Fatalf("body=%q", body)
+	}
+	if len(e.records) != 1 {
+		t.Fatalf("records=%d", len(e.records))
+	}
+	if got := e.records[0]; got.CostNanos != 7_500_000 || got.Status != "error" || !strings.Contains(got.ErrorMessage, "client disconnected") {
+		t.Fatalf("record=%+v", got)
+	}
+}
+
 // failingWriter accepts the first write, then behaves like a disconnected client.
 type failingWriter struct {
 	*httptest.ResponseRecorder

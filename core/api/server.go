@@ -16,6 +16,20 @@ type Server struct {
 	Registry *llm.Registry
 	Record   func(repo.SpendRecord) // spend.Recorder.Record in production
 	Now      func() time.Time
+	// Keepalive is how long a stream may stay silent before an SSE comment goes
+	// out (see streamWriter.keepalive). 0 means defaultKeepalive.
+	Keepalive time.Duration
+}
+
+// defaultKeepalive stays well under common proxy read timeouts (nginx 60 s by
+// default, Cloudflare 100 s to the first byte), which a long prefill exceeds.
+const defaultKeepalive = 20 * time.Second
+
+func (s *Server) keepalive() time.Duration {
+	if s.Keepalive > 0 {
+		return s.Keepalive
+	}
+	return defaultKeepalive
 }
 
 const maxBody = 20 << 20
