@@ -185,3 +185,66 @@ func TestMigrate_007MovesModelEndpointToCredential(t *testing.T) {
 		}
 	}
 }
+
+// 014 backfills spend_hourly from the spend_logs already there.
+func TestMigrate_014BackfillsSpendHourly(t *testing.T) {
+	d := dbtest.New(t)
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := d.Pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	var gid, uid, mid string
+	if err := d.Pool.QueryRow(ctx, `SELECT id FROM groups WHERE name='default'`).Scan(&gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool.QueryRow(ctx, `INSERT INTO users (email, name, password_hash, role, group_id) VALUES ('a@x.io','a','x','admin',$1) RETURNING id`, gid).Scan(&uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Pool.QueryRow(ctx, `INSERT INTO models (name, provider, upstream_model) VALUES ('m','openai','m') RETURNING id`).Scan(&mid); err != nil {
+		t.Fatal(err)
+	}
+	// Roll back to before 014, then log spend: two rows in one hour, one in the next, one key-less.
+	exec(`DROP TABLE spend_hourly`)
+	exec(`DELETE FROM schema_migrations WHERE version = 'migrations/014_spend_hourly.sql'`)
+	for _, at := range []string{"2026-09-01T10:05:00Z", "2026-09-01T10:55:00Z", "2026-09-01T11:00:00Z"} {
+		exec(`INSERT INTO spend_logs (user_id, group_id, model_id, model_name, provider, input_tokens, output_tokens, cost_nanos, status, http_status, created_at, source)
+			VALUES ($1,$2,$3,'m','openai',10,5,100,'success',200,$4,'playground')`, uid, gid, mid, at)
+	}
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Pool.Query(ctx, `SELECT hour_start, key_id IS NULL, requests, input_tokens, output_tokens, cost_nanos FROM spend_hourly ORDER BY hour_start`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type row struct {
+		hour             time.Time
+		nullKey          bool
+		n, in, out, cost int64
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.hour, &r.nullKey, &r.n, &r.in, &r.out, &r.cost); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	want := []row{
+		{time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC), true, 2, 20, 10, 200},
+		{time.Date(2026, 9, 1, 11, 0, 0, 0, time.UTC), true, 1, 10, 5, 100},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("backfill rows %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if !got[i].hour.Equal(want[i].hour) || got[i].nullKey != want[i].nullKey || got[i].n != want[i].n ||
+			got[i].in != want[i].in || got[i].out != want[i].out || got[i].cost != want[i].cost {
+			t.Fatalf("backfill row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

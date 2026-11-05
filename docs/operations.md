@@ -40,7 +40,7 @@ While the users table is empty, `serve` generates a one-time setup token at star
 
 ## Upgrades and migrations
 
-Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
+Postgres 15 or later is required (the bundled compose file runs 16). Migrations are embedded in the binary and applied at startup, each in its own transaction, recorded in `schema_migrations`. A Postgres advisory lock serializes concurrent migrators, so `serve` and `admin create` started together on a fresh database don't collide. A failed migration stops startup and leaves the database at the last good version. Back up before upgrading. Rolling back to an older binary after a migration has run is not supported.
 
 ### Upgrading from v0.1.0: endpoint precedence changed
 
@@ -61,7 +61,7 @@ Both run in-process, starting when the server starts.
 | Job | Interval | What it does |
 |---|---|---|
 | `budget_reset` | 1 min | Resets key and group spend whose budget period has ended. Periods are computed in the server timezone (console → Settings). |
-| `spend_retention` | 24 h | Deletes `spend_logs` rows older than `SPEND_RETENTION_DAYS` (default 90). Budget counters are unaffected. |
+| `spend_retention` | 24 h | Deletes `spend_logs` rows older than `SPEND_RETENTION_DAYS` (default 90). Budget counters are unaffected, and so are spend totals: the hourly rollup in `spend_hourly` is kept indefinitely, so the dashboard's charts and breakdowns still cover older ranges. Only the per-request list is limited to the retention window. The rollup starts with the upgrade that adds it (migration 014), backfilled from the logs still retained then. |
 
 Failures log `job failed` with the job name and are retried on the next tick.
 

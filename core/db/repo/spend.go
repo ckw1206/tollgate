@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -142,6 +143,9 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 		"latency_ms", "status", "http_status", "error_message", "created_at", "source"}, pgx.CopyFromRows(rows)); err != nil {
 		return nil, fmt.Errorf("copy spend_logs: %w", err)
 	}
+	if err := rollupHourly(ctx, tx, recs); err != nil {
+		return nil, err
+	}
 	keyRolled, err := rollSpend(ctx, tx, "api_keys", keyLims, keyCost, now)
 	if err != nil {
 		return nil, err
@@ -169,6 +173,61 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 		return nil, err
 	}
 	return crossings, nil
+}
+
+// rollupHourly adds the batch to spend_hourly (#26) in the caller's
+// transaction, so the rollup and spend_logs never disagree. Records are
+// summed per (UTC hour, key, user, group, model) first: one upsert per bucket,
+// and no statement touches the same row twice. Go's Truncate(time.Hour) works
+// on absolute time, so it matches date_trunc('hour', ..., 'UTC').
+func rollupHourly(ctx context.Context, tx pgx.Tx, recs []SpendRecord) error {
+	type bucket struct {
+		hour                    time.Time
+		key, user, group, model string
+	}
+	type totals struct{ n, in, out, cr, cw, cost int64 }
+	sums := map[bucket]*totals{}
+	var order []bucket
+	for _, r := range recs {
+		b := bucket{r.CreatedAt.UTC().Truncate(time.Hour), r.KeyID, r.UserID, r.GroupID, r.ModelName}
+		t := sums[b]
+		if t == nil {
+			t = &totals{}
+			sums[b] = t
+			order = append(order, b)
+		}
+		t.n++
+		t.in += r.InputTokens
+		t.out += r.OutputTokens
+		t.cr += r.CacheReadTokens
+		t.cw += r.CacheWriteTokens
+		t.cost += r.CostNanos
+	}
+	batch := &pgx.Batch{}
+	for _, b := range order {
+		t := sums[b]
+		var keyID any
+		if b.key != "" {
+			keyID = b.key
+		}
+		batch.Queue(`
+			INSERT INTO spend_hourly (hour_start, key_id, user_id, group_id, model_name, requests,
+				input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_nanos)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+			ON CONFLICT ON CONSTRAINT spend_hourly_bucket DO UPDATE SET
+				requests = spend_hourly.requests + EXCLUDED.requests,
+				input_tokens = spend_hourly.input_tokens + EXCLUDED.input_tokens,
+				output_tokens = spend_hourly.output_tokens + EXCLUDED.output_tokens,
+				cache_read_tokens = spend_hourly.cache_read_tokens + EXCLUDED.cache_read_tokens,
+				cache_write_tokens = spend_hourly.cache_write_tokens + EXCLUDED.cache_write_tokens,
+				cost_nanos = spend_hourly.cost_nanos + EXCLUDED.cost_nanos`,
+			b.hour, keyID, b.user, b.group, b.model, t.n, t.in, t.out, t.cr, t.cw, t.cost)
+	}
+	// One round trip for the whole batch; Close reports the first failure.
+	if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+		return fmt.Errorf("upsert spend_hourly: %w", err)
+	}
+	return nil
 }
 
 // rollSpend adds each scope's in-window cost to its spend counter, rolling
@@ -428,8 +487,11 @@ func (s *Store) GateStats(ctx context.Context, userID string) (*GateStats, error
 	return &g, nil
 }
 
-const spendWhere = `WHERE created_at >= $1 AND created_at < $2
-	AND ($3 = '' OR user_id::text = $3) AND ($4 = '' OR group_id::text = $4) AND ($5 = '' OR key_id::text = $5)`
+// spendScope is the caller's user/group/key filter ($3-$5), shared by
+// spend_logs and spend_hourly (same column names).
+const spendScope = `($3 = '' OR user_id::text = $3) AND ($4 = '' OR group_id::text = $4) AND ($5 = '' OR key_id::text = $5)`
+
+const spendWhere = `WHERE created_at >= $1 AND created_at < $2 AND ` + spendScope
 
 // spendDay buckets by calendar day in the server timezone.
 const spendDay = `to_char(created_at AT TIME ZONE (SELECT timezone FROM server_settings WHERE id=1), 'YYYY-MM-DD')`
@@ -485,9 +547,31 @@ func (s *Store) QuerySpend(ctx context.Context, f SpendFilter) ([]SpendRow, erro
 	case "model,year":
 		day = spendYear
 	}
+	// Logs where they are complete, the hourly rollup before that (#26). The
+	// split h is the hour after the oldest retained log: spend_logs is pruned
+	// strictly by age, so every log at or after h is still there, and the
+	// rollup holds every hour before h in full (the pruned and the retained
+	// part of the oldest hour alike). The two sides are disjoint: logs from
+	// max(from, h), rollup hours that start in [from, min(to, h)). A rollup
+	// hour is counted whole, so it is exact when from and to are on an hour
+	// boundary or to is in the future (the current hour holds nothing after
+	// now). Console ranges are, in whole-hour zones; in :30/:45 zones the
+	// rollup side is off by that offset at the range edges. Until logs are first pruned, h is the hour
+	// after the first request ever, so recent ranges read logs only.
+	hourly := func(expr string) string { return strings.ReplaceAll(expr, "created_at", "hour_start") }
 	rows, err := s.pool.Query(ctx, `
-		SELECT `+bucket+` AS b, `+day+` AS d, count(*), sum(input_tokens + cache_read_tokens + cache_write_tokens), sum(output_tokens), sum(cost_nanos)
-		FROM spend_logs `+spendWhere+` GROUP BY b, d ORDER BY d, b`,
+		WITH h AS (SELECT COALESCE(date_trunc('hour', min(created_at), 'UTC') + interval '1 hour', 'infinity') AS t FROM spend_logs)
+		SELECT b, d, sum(n)::bigint, sum(i)::bigint, sum(o)::bigint, sum(c)::bigint FROM (
+			SELECT `+bucket+` AS b, `+day+` AS d, count(*) AS n,
+				sum(input_tokens + cache_read_tokens + cache_write_tokens) AS i, sum(output_tokens) AS o, sum(cost_nanos) AS c
+			FROM spend_logs, h WHERE created_at >= GREATEST($1, h.t) AND created_at < $2 AND `+spendScope+`
+			GROUP BY b, d
+			UNION ALL
+			SELECT `+hourly(bucket)+`, `+hourly(day)+`, sum(requests),
+				sum(input_tokens + cache_read_tokens + cache_write_tokens), sum(output_tokens), sum(cost_nanos)
+			FROM spend_hourly, h WHERE hour_start >= $1 AND hour_start < LEAST($2, h.t) AND `+spendScope+`
+			GROUP BY 1, 2
+		) x GROUP BY b, d ORDER BY d, b`,
 		f.From, f.To, f.UserID, f.GroupID, f.KeyID)
 	if err != nil {
 		return nil, err

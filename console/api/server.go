@@ -26,8 +26,11 @@ type Server struct {
 	Reload          func(context.Context) error // rebuild the model registry after model/credential writes
 	BaseURL         string
 	TrustedProxies  []netip.Prefix
-	Version, Commit string      // build info for /auth/me, set by main from -ldflags
-	Setup           *SetupToken // first-run setup token; nil when users existed at startup
+	Version, Commit string // build info for /auth/me, set by main from -ldflags
+	// SpendRetentionDays is how long per-request spend_logs are kept (SPEND_RETENTION_DAYS);
+	// /auth/me reports it so the dashboard can say when request rows are pruned. 0 = unknown.
+	SpendRetentionDays int
+	Setup              *SetupToken // first-run setup token; nil when users existed at startup
 }
 
 const p = "/console/api/v1"

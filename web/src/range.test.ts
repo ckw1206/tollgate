@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { RANGES, fmtBucket, isoWeekLabel, mondayOfIsoWeek, spanOf } from './range'
+import { RANGES, beforeRetention, fmtBucket, isoWeekLabel, mondayOfIsoWeek, spanOf } from './range'
 
 // Contract C4 pins. Fixed instants so the suite never drifts with the clock.
 const NOW = Date.parse('2026-10-14T15:30:00Z')
@@ -131,5 +131,20 @@ describe('fmtBucket', () => {
     expect(fmtBucket('2026-W42', 'week')).toBe('Oct 12 (W42)') // Monday of W42
     expect(fmtBucket('2026-10', 'month')).toBe('Oct 2026')
     expect(fmtBucket('2026', 'year')).toBe('2026')
+  })
+})
+
+describe('beforeRetention', () => {
+  const NOW = Date.parse('2026-11-05T12:00:00Z')
+  const q = (from: string) => new URLSearchParams({ from, to: '2026-11-05T12:01:00Z' }).toString()
+  it('a range inside the retention window: no note', () => {
+    expect(beforeRetention(q('2026-10-01T00:00:00Z'), 90, NOW)).toBe(false)
+  })
+  it('a range older than the retention window: note', () => {
+    expect(beforeRetention(q('2026-07-01T00:00:00Z'), 90, NOW)).toBe(true)
+  })
+  it('unknown retention or a bad query: no note', () => {
+    expect(beforeRetention(q('2020-01-01T00:00:00Z'), 0, NOW)).toBe(false)
+    expect(beforeRetention('from=nope', 90, NOW)).toBe(false)
   })
 })

@@ -5,7 +5,7 @@ import { dash, fmtTokens, short, usd, when } from '../api'
 import { useAuth } from '../auth'
 import GetStarted from '../components/GetStarted'
 import { Badge, Banner, controlCls, DetailPanel, ErrorText, PageHeader, Segmented, Skeleton, Sparkline, Table, useLoad } from '../components/ui'
-import { fmtBucket, isDay, PER_UNIT, PER_WORD, RANGES, spanOf } from '../range'
+import { beforeRetention, fmtBucket, isDay, PER_UNIT, PER_WORD, RANGES, spanOf } from '../range'
 import type { Granularity, Range } from '../range'
 import type { ApiKey, Group, SpendLog, SpendRow, User } from '../types'
 
@@ -296,6 +296,9 @@ export default function Dashboard() {
   const daily = useLoad<Spend>(`/console/api/v1/spend?group_by=${span.groupBy}&${span.q}`)
   const byModel = useLoad<Spend>(`/console/api/v1/spend?group_by=model&${span.q}`)
   const recent = useLoad<SpendLog[]>(`/console/api/v1/spend/requests?${span.q}&limit=${show}`)
+  // Older than the per-request logs: the list stops at the retention edge, the totals don't (#26).
+  const retentionDays = me?.server.spend_retention_days ?? 0
+  const pruned = beforeRetention(span.q, retentionDays)
   // Stat-card sparklines: always the last 30 days by day, whatever range the
   // panels use — one /spend?group_by=day fetch feeds all three series.
   const spark30 = useMemo(() => spanOf('30d', null, null, tz), [tz])
@@ -467,6 +470,11 @@ export default function Dashboard() {
       {!!recentRows?.length && requests !== null && (
         <p className="mt-2 text-xs text-muted-foreground">
           Latest {recentRows.length} of {fmt.format(requests)} requests {span.phrase} · newest first
+        </p>
+      )}
+      {pruned && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Per-request logs are kept for {retentionDays} days, so this list stops there. Totals and charts still include older spend, back to when hourly totals started being kept.
         </p>
       )}
     </>

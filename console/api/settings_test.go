@@ -454,3 +454,19 @@ func readBody(r *http.Request) string {
 	}
 	return string(buf)
 }
+
+// #26: every role learns how long per-request logs are kept, so the
+// dashboard can say when the request list stops short of the range.
+func TestMe_ReportsSpendRetention(t *testing.T) {
+	e := newTenv(t)
+	for _, email := range []string{"admin@x.io", "member@x.io", "viewer@x.io"} {
+		me := decodeInto[struct {
+			Server struct {
+				SpendRetentionDays int `json:"spend_retention_days"`
+			} `json:"server"`
+		}](t, e.as(email, "GET", "/auth/me", nil))
+		if me.Server.SpendRetentionDays != 45 {
+			t.Fatalf("%s: spend_retention_days = %d, want 45", email, me.Server.SpendRetentionDays)
+		}
+	}
+}

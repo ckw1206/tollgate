@@ -233,3 +233,13 @@ export function fmtBucket(b: string, g: Granularity) {
 
 export const PER_WORD: Record<Granularity, string> = { hour: 'hourly', day: 'daily', week: 'weekly', month: 'monthly', year: 'yearly' }
 export const PER_UNIT: Record<Granularity, string> = { hour: 'hr', day: 'day', week: 'wk', month: 'mo', year: 'yr' }
+
+// beforeRetention: whether a span (its from=&to= query) reaches further back than
+// the per-request logs are kept. Totals and charts still cover it (they read the
+// hourly rollup, #26); only the request list stops at the retention edge.
+// days <= 0 means unknown: no note.
+export function beforeRetention(q: string, days: number, now = Date.now()): boolean {
+  if (!(days > 0)) return false
+  const from = Date.parse(new URLSearchParams(q).get('from') ?? '')
+  return Number.isFinite(from) && from < now - days * DAY
+}
