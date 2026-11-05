@@ -120,6 +120,7 @@ var errClientGone = errors.New("client disconnected mid-stream")
 func (s *Server) stream(w http.ResponseWriter, r *http.Request, upCtx context.Context, m *llm.Model, p llm.Provider, req *llm.ChatRequest) (llm.Usage, error) {
 	sw := &streamWriter{w: w}
 	stop := sw.keepalive(s.keepalive())
+	defer stop() // a provider panic: net/http tears down the conn the goroutine writes to
 	u, err := p.ChatStream(upCtx, m, req, sw.write)
 	stop()
 	if sw.gone {
@@ -152,7 +153,8 @@ type streamWriter struct {
 // slow (a long prefill on a self-hosted backend). The first comment also sends
 // the headers: an upstream failure after that becomes an SSE error event with
 // HTTP 200, while one within every still gets its real status code. stop waits
-// for the goroutine, so nothing writes to w after the handler returns.
+// for the goroutine, so nothing writes to w after the handler returns, and is
+// safe to call more than once (the caller also defers it for panics).
 func (sw *streamWriter) keepalive(every time.Duration) (stop func()) {
 	sw.last = time.Now()
 	done, exited := make(chan struct{}), make(chan struct{})
@@ -181,7 +183,8 @@ func (sw *streamWriter) keepalive(every time.Duration) (stop func()) {
 			t.Reset(next)
 		}
 	}()
-	return func() { close(done); <-exited }
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }); <-exited }
 }
 
 func (sw *streamWriter) start() {

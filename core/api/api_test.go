@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -300,11 +301,11 @@ func TestChat_StreamFastError_KeepsStatus(t *testing.T) {
 }
 
 // A client that drops while only keepalives have been sent is detected by the
-// failed keepalive write; a priced model still drains and bills.
+// failed keepalive write (the upstream emits no chunks, so nothing else could
+// notice); a priced model still drains and bills.
 func TestChat_StreamKeepalive_ClientGone(t *testing.T) {
 	e := newEnv(t, repo.KeyInput{})
 	e.srv.Keepalive = 10 * time.Millisecond
-	e.prov.chunks = []string{`{"a":1}`}
 	e.prov.during = func(context.Context) { time.Sleep(60 * time.Millisecond) }
 	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(streamBody))
 	r.Header.Set("Authorization", "Bearer "+e.raw)
@@ -319,6 +320,29 @@ func TestChat_StreamKeepalive_ClientGone(t *testing.T) {
 	if got := e.records[0]; got.CostNanos != 7_500_000 || got.Status != "error" || !strings.Contains(got.ErrorMessage, "client disconnected") {
 		t.Fatalf("record=%+v", got)
 	}
+}
+
+// A provider panic must stop the keepalive goroutine as the handler unwinds.
+// Otherwise its next tick flushes into a connection net/http has already torn
+// down, panicking outside any recover and killing the process (here: the test
+// binary).
+func TestChat_StreamKeepalive_ProviderPanic(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	e.srv.Keepalive = 5 * time.Millisecond
+	e.prov.during = func(context.Context) { time.Sleep(30 * time.Millisecond); panic("provider bug") }
+	ts := httptest.NewUnstartedServer(e.h)
+	ts.Config.ErrorLog = log.New(io.Discard, "", 0) // net/http logs the recovered panic
+	ts.Start()
+	defer ts.Close()
+	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(streamBody))
+	req.Header.Set("Authorization", "Bearer "+e.raw)
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, res.Body) // ends when the server drops the connection
+	res.Body.Close()
+	time.Sleep(50 * time.Millisecond) // many keepalive ticks after the handler unwound
 }
 
 // failingWriter accepts the first write, then behaves like a disconnected client.
