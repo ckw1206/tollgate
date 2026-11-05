@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/ckw1206/tollgate/compare/v0.4.0...v0.5.0) (2026-11-05)
+
+
+### Features
+
+* **budget:** keep hourly spend totals past spend_logs retention ([#62](https://github.com/ckw1206/tollgate/issues/62)) ([d85fe45](https://github.com/ckw1206/tollgate/commit/d85fe4534d05553e107a512eb75a3e6ba0a4388b)), closes [#26](https://github.com/ckw1206/tollgate/issues/26)
+* **budget:** server-wide global spend cap ([#63](https://github.com/ckw1206/tollgate/issues/63)) ([85e3163](https://github.com/ckw1206/tollgate/commit/85e316364810dbce863fbf16b4333577061bee98)), closes [#31](https://github.com/ckw1206/tollgate/issues/31)
+* **console:** show budget usage % and next reset on Keys and Groups ([#60](https://github.com/ckw1206/tollgate/issues/60)) ([794857e](https://github.com/ckw1206/tollgate/commit/794857e8339a1799fa4fe108f79c1fb0bd0b9042)), closes [#25](https://github.com/ckw1206/tollgate/issues/25)
+
+
+### Fixes
+
+* **budget:** reschedule daily/monthly resets when the timezone changes ([#61](https://github.com/ckw1206/tollgate/issues/61)) ([e9fbf44](https://github.com/ckw1206/tollgate/commit/e9fbf44cbf9438e0584496a339ed45ad62cc3237)), closes [#27](https://github.com/ckw1206/tollgate/issues/27)
+* **chat:** send SSE keepalives while a stream is silent ([#58](https://github.com/ckw1206/tollgate/issues/58)) ([6b1b033](https://github.com/ckw1206/tollgate/commit/6b1b0333c5b98ec5612c7c108ff381e00e28a35f))
+
 ## [0.4.0](https://github.com/ckw1206/tollgate/compare/v0.3.1...v0.4.0) (2026-11-04)
 
 
