@@ -13,9 +13,10 @@ services:
   redis:
     image: redis:7-alpine
   tollgate:
-    build:
-      context: .
-      args: [VERSION, COMMIT] # from the shell env; unset = the Dockerfile defaults (dev)
+    # The released image (multi-arch). Pin TOLLGATE_VERSION in .env (e.g. v0.5.0):
+    # migrations can't be rolled back, so upgrade on purpose, not on a stray pull.
+    # Build from source instead with docker-compose.dev.yml.
+    image: ghcr.io/ckw1206/tollgate:${TOLLGATE_VERSION:-latest}
     env_file:
       - path: .env
         required: false # so `docker compose up -d postgres redis` works before .env exists

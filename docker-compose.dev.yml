@@ -1,7 +1,18 @@
-# Publishes Postgres and Redis on the host's loopback for `go run` / `make test`.
-# docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+# Local development on top of docker-compose.yml.
+#
+# Postgres and Redis on the host's loopback, for `go run` / `make test`:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis
+#
+# The gateway built from this checkout instead of the released image:
+#   VERSION=dev COMMIT=$(git rev-parse HEAD) docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 services:
   postgres:
     ports: ["127.0.0.1:${POSTGRES_PORT:-5432}:5432"]
   redis:
     ports: ["127.0.0.1:${REDIS_PORT:-6379}:6379"]
+  tollgate:
+    image: tollgate:dev # never the registry tag, so a local build can't pass for a release
+    pull_policy: build
+    build:
+      context: .
+      args: [VERSION, COMMIT] # from the shell env; unset = the Dockerfile defaults (dev)
