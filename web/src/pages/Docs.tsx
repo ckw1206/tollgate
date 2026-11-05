@@ -540,7 +540,7 @@ export default function Docs() {
               {[
                 ['Two layers', <>Every request is checked against your <B>key</B> and its <B>group</B>. The first limit hit wins; the message says which.</>],
                 ['RPM / TPM', <>Fixed one-minute windows on the clock minute. Tokens count after the response (input + output). On 429 wait <code className="font-mono">Retry-After</code> seconds — the time to the next minute.</>],
-                ['Budgets', <>Daily or monthly budgets reset at midnight / the 1st in the server timezone; total budgets never reset. Budgets are checked when a request starts and its cost is added when it finishes, so requests already in flight can push spend past the budget.</>],
+                ['Budgets', <>Daily or monthly budgets reset at midnight / the 1st in the server timezone; total budgets never reset. An optional global cap (Settings) sits above every group: once it is reached, every request gets 429 <C>budget_exceeded</C> ("global budget exceeded") until it resets. Budgets are checked when a request starts and its cost is added when it finishes, so requests already in flight can push spend past the budget.</>],
                 ["What's billed", <>Every request that reached the provider is logged and charged for the tokens it reported, so an upstream error usually costs $0. Requests Tollgate rejects cost nothing. <code className="font-mono">prompt_tokens</code> includes cached tokens.</>],
               ].map(([title, body]) => (
                 <div key={title as string} className="flex flex-col gap-1.5 bg-background p-4">

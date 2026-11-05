@@ -76,3 +76,15 @@ func TestChatAs_NoKey_ModelOutsideGroup403(t *testing.T) {
 		t.Fatalf("refused request recorded: %+v", e.records)
 	}
 }
+
+// #31: the playground (key-less) path is under the server-wide cap too.
+func TestChatAs_NoKey_GlobalCapExceeded(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	info := e.keylessInfo(t)
+	reset := time.Now().Add(24 * time.Hour)
+	info.Global = repo.Limits{BudgetType: "daily", BudgetNanos: 1, SpendNanos: 1, BudgetResetAt: &reset}
+	w := e.chatAs(info, chatBody)
+	if w.Code != 429 || errCode(t, w) != "budget_exceeded" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}

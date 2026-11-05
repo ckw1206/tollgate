@@ -155,6 +155,16 @@ export interface Settings {
   budget_webhook_url: string // '' = no budget alerts
 }
 
+// GET/PUT /console/api/v1/settings/budget (#31): the server-wide spend cap.
+// Admin-only; deliberately not part of Settings, which /auth/me sends to every role.
+export interface GlobalBudget {
+  budget_type: 'unlimited' | 'daily' | 'monthly'
+  budget_nanos: number
+  spend_nanos: number
+  budget_reset_at: string | null
+  reserved_nanos: number
+}
+
 // GET /auth/landing: public, cached for 60s.
 export interface LandingInfo {
   server_name: string

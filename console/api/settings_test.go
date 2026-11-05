@@ -470,3 +470,59 @@ func TestMe_ReportsSpendRetention(t *testing.T) {
 		}
 	}
 }
+
+// #31: the server-wide cap is admin-only to read and to set; the denied
+// roles get 403 and the cap is unchanged.
+func TestSettings_GlobalBudget(t *testing.T) {
+	e := newTenv(t)
+	for _, email := range []string{"member@x.io", "viewer@x.io"} {
+		if w := e.as(email, "PUT", "/console/api/v1/settings/budget", map[string]any{"budget_type": "daily", "budget_nanos": 1}); w.Code != http.StatusForbidden {
+			t.Fatalf("%s PUT budget: %d %s", email, w.Code, w.Body)
+		}
+		if w := e.as(email, "GET", "/console/api/v1/settings/budget", nil); w.Code != http.StatusForbidden {
+			t.Fatalf("%s GET budget: %d %s", email, w.Code, w.Body)
+		}
+	}
+	type view struct {
+		BudgetType  string  `json:"budget_type"`
+		BudgetNanos int64   `json:"budget_nanos"`
+		SpendNanos  int64   `json:"spend_nanos"`
+		ResetAt     *string `json:"budget_reset_at"`
+	}
+	if got := decodeInto[view](t, e.as("admin@x.io", "GET", "/console/api/v1/settings/budget", nil)); got.BudgetType != "unlimited" {
+		t.Fatalf("default: %+v (a denied PUT must not have changed it)", got)
+	}
+	got := decodeInto[view](t, e.as("admin@x.io", "PUT", "/console/api/v1/settings/budget", map[string]any{"budget_type": "monthly", "budget_nanos": 5e9}))
+	if got.BudgetType != "monthly" || got.BudgetNanos != 5e9 || got.ResetAt == nil {
+		t.Fatalf("admin PUT: %+v", got)
+	}
+	for _, bad := range []map[string]any{{"budget_type": "total", "budget_nanos": 1}, {"budget_type": "daily", "budget_nanos": -1}, {"budget_type": "daily", "budget_nanos": 0}, {"budget_type": "weekly"}} {
+		if w := e.as("admin@x.io", "PUT", "/console/api/v1/settings/budget", bad); w.Code != 400 {
+			t.Fatalf("PUT %v: %d %s", bad, w.Code, w.Body)
+		}
+	}
+	// The cap stays out of /auth/me, which every role reads.
+	if w := e.as("viewer@x.io", "GET", "/auth/me", nil); strings.Contains(w.Body.String(), "budget_nanos") {
+		t.Fatalf("/auth/me exposes the global cap: %s", w.Body)
+	}
+	// The audit entry records the cap before and after.
+	audit := decodeInto[struct {
+		Entries []repo.AuditEntry
+	}](t, e.as("admin@x.io", "GET", "/console/api/v1/audit?action=settings.budget", nil))
+	if len(audit.Entries) != 1 {
+		t.Fatalf("audit entries: %d", len(audit.Entries))
+	}
+	var d struct {
+		Before, After struct {
+			BudgetType string `json:"budget_type"`
+		}
+	}
+	if err := json.Unmarshal(audit.Entries[0].Details, &d); err != nil || d.Before.BudgetType != "unlimited" || d.After.BudgetType != "monthly" {
+		t.Fatalf("audit details %s (%v), want before unlimited, after monthly", audit.Entries[0].Details, err)
+	}
+	// Saving the settings form doesn't touch the cap.
+	setWebhookURL(t, e, "")
+	if got := decodeInto[view](t, e.as("admin@x.io", "GET", "/console/api/v1/settings/budget", nil)); got.BudgetType != "monthly" {
+		t.Fatalf("settings save changed the cap: %+v", got)
+	}
+}

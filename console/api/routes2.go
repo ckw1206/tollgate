@@ -32,5 +32,7 @@ func (s *Server) extraRoutes() map[string]http.Handler {
 		"GET " + p + "/settings":                     req(rbac.SettingsRead, s.getSettings),
 		"PUT " + p + "/settings":                     req(rbac.SettingsWrite, s.putSettings),
 		"POST " + p + "/settings/webhook/test":       req(rbac.SettingsWrite, s.testWebhook),
+		"GET " + p + "/settings/budget":              req(rbac.SettingsRead, s.getGlobalBudget),
+		"PUT " + p + "/settings/budget":              req(rbac.SettingsWrite, s.putGlobalBudget),
 	}
 }

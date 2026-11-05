@@ -3,6 +3,7 @@ import { api, sendWebhookTest } from '../api'
 import { useAuth } from '../auth'
 import { ICON_TYPES, iconFromFile } from '../icon'
 import { BrandIcon } from '../Layout'
+import GlobalCap from '../components/GlobalCap'
 import { DEFAULT_HEADLINE, DEFAULT_TAGLINE } from '../components/LandingShell'
 import { Button, controlCls, ErrorText, Field, inputCls, PageHeader, useLoad } from '../components/ui'
 import type { Settings as S } from '../types'
@@ -158,6 +159,7 @@ export default function Settings() {
         {msg && <p className="text-sm text-success-foreground">{msg}</p>}
         {!ro && <Button disabled={busy}>{busy ? 'Saving…' : 'Save'}</Button>}
       </form>
+      <GlobalCap editable={!ro} />
     </>
   )
 }

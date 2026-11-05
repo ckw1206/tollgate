@@ -289,6 +289,8 @@ func TestRoutes_DeniedRoles(t *testing.T) {
 		{"GET", "/audit", rbac.AuditRead},
 		{"GET", "/settings", rbac.SettingsRead},
 		{"PUT", "/settings", rbac.SettingsWrite},
+		{"GET", "/settings/budget", rbac.SettingsRead},
+		{"PUT", "/settings/budget", rbac.SettingsWrite},
 	}
 	body := map[string]any{"name": "default", "budget_type": "unlimited", "models": []string{}, "extra_models": []string{}, "group_id": e.group.ID}
 	denied := 0

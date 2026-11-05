@@ -62,12 +62,18 @@ func (s *Server) playgroundChat(w http.ResponseWriter, r *http.Request) {
 		storeErr(w, err)
 		return
 	}
+	global, err := s.Store.GlobalBudget(r.Context())
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
 	s.Gateway.ChatAs(w, r, &repo.AuthInfo{
 		Key:         repo.APIKey{UserID: me.ID, GroupID: me.GroupID},
 		Group:       *g,
 		UserEmail:   me.Email,
 		GroupModels: g.Models,
 		ExtraModels: me.ExtraModels,
+		Global:      global, // the server-wide cap applies to the playground too (#31)
 	})
 }
 

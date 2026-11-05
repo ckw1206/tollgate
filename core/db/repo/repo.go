@@ -122,7 +122,7 @@ func (l Limits) isWindowed() bool {
 // one-shot notify marker). Label is the key alias or group name — never a raw
 // key, hash, or prefix.
 type BudgetCrossing struct {
-	Scope         string     `json:"scope"` // "key" or "group"
+	Scope         string     `json:"scope"` // "key", "group" or "global" (#31)
 	ID            string     `json:"id"`
 	Label         string     `json:"label"`       // key alias or group name (never a raw key/hash/prefix)
 	Threshold     int        `json:"threshold"`   // 80 or 100
