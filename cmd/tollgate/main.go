@@ -153,7 +153,7 @@ func serve() error {
 	gateway := &api.Server{Store: store, Cache: c, Registry: reg, Record: rec.Record, Now: time.Now}
 	gateway.Register(mux)
 	(&consoleapi.Server{Store: store, Cache: c, Vault: v, Reload: reload, BaseURL: cfg.BaseURL, TrustedProxies: cfg.TrustedProxies,
-		Version: version, Commit: commit, Setup: setup, Gateway: gateway,
+		Version: version, Commit: commit, Setup: setup, Gateway: gateway, SpendRetentionDays: cfg.SpendRetentionDays,
 		Sessions: &auth.Sessions{Cache: c, Store: store, Insecure: cfg.CookieInsecure, TTL: 24 * time.Hour}}).Register(mux)
 	mux.Handle("GET /", web.Handler(web.Dist())) // console SPA; API routes above take precedence
 

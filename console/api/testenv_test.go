@@ -139,7 +139,7 @@ func buildTenv(t *testing.T, withUsers bool) *tenv {
 	gw := &api.Server{Store: s, Cache: c, Registry: reg, Now: time.Now,
 		Record: func(r repo.SpendRecord) { e.mu.Lock(); e.records = append(e.records, r); e.mu.Unlock() }}
 	srv := &Server{Store: s, Cache: c, Vault: v, BaseURL: base, Setup: e.setup,
-		Version: "v0.0.0-test", Commit: "0123456789abcdef0123456789abcdef01234567",
+		Version: "v0.0.0-test", Commit: "0123456789abcdef0123456789abcdef01234567", SpendRetentionDays: 45,
 		Sessions: &auth.Sessions{Cache: c, Store: s, TTL: time.Hour},
 		Reload:   func(context.Context) error { e.reloads++; return nil },
 		Gateway:  gw}

@@ -62,8 +62,9 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 // GET /console/api/v1/settings (settings:read, admin-only).
 type meServer struct {
 	*repo.Settings
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
+	Version            string `json:"version"`
+	Commit             string `json:"commit"`
+	SpendRetentionDays int    `json:"spend_retention_days"` // per-request logs; totals outlive it (#26)
 }
 
 func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, u *repo.User) {
@@ -74,6 +75,6 @@ func (s *Server) writeMe(w http.ResponseWriter, r *http.Request, u *repo.User) {
 	}
 	redacted := *st
 	redacted.BudgetWebhookURL = ""
-	server := meServer{Settings: &redacted, Version: s.Version, Commit: s.Commit}
+	server := meServer{Settings: &redacted, Version: s.Version, Commit: s.Commit, SpendRetentionDays: s.SpendRetentionDays}
 	api.WriteJSON(w, 200, map[string]any{"user": u, "permissions": rbac.Permissions(u.Role), "server": server})
 }

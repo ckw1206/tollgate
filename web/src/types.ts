@@ -169,6 +169,7 @@ export interface LandingInfo {
 export interface ServerInfo extends Settings {
   version: string
   commit: string
+  spend_retention_days: number // per-request logs are pruned after this; totals are kept (0 = unknown)
 }
 
 export interface Me {
