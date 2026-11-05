@@ -39,6 +39,7 @@ type AuthInfo struct {
 	UserDisabled bool
 	GroupModels  []string // model access comes from the owner's group (users.group_id)
 	ExtraModels  []string
+	Global       Limits // the server-wide cap (#31); BudgetType "" or "unlimited" = none
 }
 
 func GenerateKey() (raw, hash, prefix string) {
@@ -131,11 +132,14 @@ func (s *Store) AuthByKeyHash(ctx context.Context, hash string) (*AuthInfo, erro
 	var a AuthInfo
 	g := &a.Group
 	dest := append(keyDest(&a.Key), &a.UserEmail, &a.UserDisabled, &a.GroupModels, &a.ExtraModels,
-		&g.ID, &g.Name, &g.BudgetType, &g.BudgetNanos, &g.SpendNanos, &g.BudgetResetAt, &g.RPMLimit, &g.TPMLimit, &g.CreatedAt, &g.UpdatedAt)
+		&g.ID, &g.Name, &g.BudgetType, &g.BudgetNanos, &g.SpendNanos, &g.BudgetResetAt, &g.RPMLimit, &g.TPMLimit, &g.CreatedAt, &g.UpdatedAt,
+		&a.Global.BudgetType, &a.Global.BudgetNanos, &a.Global.SpendNanos, &a.Global.BudgetResetAt)
 	err := s.pool.QueryRow(ctx, `
 		SELECT `+keyCols+`, u.email, u.disabled, ug.models, u.extra_models,
-			g.id, g.name, g.budget_type, g.budget_nanos, g.spend_nanos, g.budget_reset_at, g.rpm_limit, g.tpm_limit, g.created_at, g.updated_at
+			g.id, g.name, g.budget_type, g.budget_nanos, g.spend_nanos, g.budget_reset_at, g.rpm_limit, g.tpm_limit, g.created_at, g.updated_at,
+			ss.budget_type, ss.budget_nanos, ss.spend_nanos, ss.budget_reset_at
 		FROM api_keys k JOIN users u ON u.id = k.user_id JOIN groups g ON g.id = k.group_id JOIN groups ug ON ug.id = u.group_id
+		JOIN server_settings ss ON ss.id = 1
 		WHERE k.key_hash = $1`, hash).Scan(dest...)
 	return &a, notFound(err)
 }

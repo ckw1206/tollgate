@@ -59,7 +59,9 @@ var ErrInvalidTimezone = errors.New("invalid timezone")
 // aligns at its next reset. With SPEND_RETENTION_DAYS shorter than a month, a
 // monthly recount covers only the retained logs.
 //
-// Lock order: the settings row first (FOR UPDATE here, FOR SHARE in
+// The server-wide cap (#31) is recounted the same way, from every log.
+//
+// Lock order: the settings row first (FOR UPDATE here, FOR NO KEY UPDATE in
 // RecordSpend), then key and group rows. A spend batch either commits before
 // this save takes its snapshot, or waits and then sees the new zone, so
 // neither overwrites the other's counter.
@@ -90,11 +92,14 @@ func (s *Store) UpdateSettings(ctx context.Context, in Settings) (*Settings, err
 		// next_budget_reset computes boundaries in the new zone, and the window
 		// start is the same boundary one period earlier: the current local day
 		// or month start ($1 = the new zone).
-		for _, sc := range []struct{ table, col string }{{"api_keys", "key_id"}, {"groups", "group_id"}} {
+		// The global cap (#31) counts every log: its filter is always true.
+		for _, sc := range []struct{ table, match string }{
+			{"api_keys", "l.key_id = t.id"}, {"groups", "l.group_id = t.id"}, {"server_settings", "TRUE"},
+		} {
 			if _, err := tx.Exec(ctx, `UPDATE `+sc.table+` t SET
 				budget_reset_at = next_budget_reset(t.budget_type),
 				spend_nanos = COALESCE((SELECT sum(l.cost_nanos) FROM spend_logs l
-					WHERE l.`+sc.col+` = t.id AND l.created_at >= date_trunc(
+					WHERE `+sc.match+` AND l.created_at >= date_trunc(
 						CASE t.budget_type WHEN 'daily' THEN 'day' ELSE 'month' END, now() AT TIME ZONE $1) AT TIME ZONE $1), 0)::bigint
 				WHERE t.budget_type IN ('daily','monthly')`, in.Timezone); err != nil {
 				return nil, err

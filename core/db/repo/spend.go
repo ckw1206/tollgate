@@ -92,13 +92,17 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	}
 	defer tx.Rollback(ctx)
 
-	// The timezone is read first, under FOR SHARE, so this batch and a settings
-	// save serialize: a save (FOR UPDATE, see UpdateSettings) waits for batches
-	// in flight, and a batch that starts during a save sees the new zone and the
+	// The settings row is locked first, so this batch and a settings save
+	// serialize: a save (FOR UPDATE, see UpdateSettings) waits for batches in
+	// flight, and a batch that starts during a save sees the new zone and the
 	// rescheduled windows. Both take the settings row before any key or group
-	// row, so the two never deadlock.
+	// row, so the two never deadlock. FOR NO KEY UPDATE, not FOR SHARE: with a
+	// global cap (#31) the batch later UPDATEs this row, and two batches each
+	// holding a share lock would deadlock upgrading it.
 	var tz string
-	if err := tx.QueryRow(ctx, `SELECT timezone FROM server_settings WHERE id=1 FOR SHARE`).Scan(&tz); err != nil {
+	var global Limits // the server-wide cap (#31), read under the same lock
+	if err := tx.QueryRow(ctx, `SELECT timezone, `+globalCols+` FROM server_settings WHERE id=1 FOR NO KEY UPDATE`).
+		Scan(&tz, &global.BudgetType, &global.BudgetNanos, &global.SpendNanos, &global.BudgetResetAt); err != nil {
 		return nil, err
 	}
 	loc := serverTimezone(tz)
@@ -154,6 +158,19 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 	if err != nil {
 		return nil, err
 	}
+	// The server-wide cap (#31): every record is global spend. Skipped while
+	// unlimited, so the settings row isn't written on every batch for nothing;
+	// SetGlobalBudget counts the window's logs when a cap is switched on.
+	var globalLims map[string]Limits
+	var globalCost map[string]int64
+	var globalRolled map[string]time.Time
+	if global.isWindowed() {
+		globalLims = map[string]Limits{GlobalID: global}
+		globalCost = inWindowCosts(recs, globalLims, func(SpendRecord) string { return GlobalID }, now, loc)
+		if globalRolled, err = rollSpend(ctx, tx, "server_settings", globalLims, globalCost, now); err != nil {
+			return nil, err
+		}
+	}
 
 	// Crossing detection runs after the counter UPDATEs, before commit, using
 	// the in-window costs fetched above. For a window this batch just rolled
@@ -168,6 +185,11 @@ func (s *Store) RecordSpend(ctx context.Context, recs []SpendRecord) ([]BudgetCr
 		return nil, err
 	}
 	crossings = append(crossings, gx...)
+	sx, err := s.detectCrossings(ctx, tx, "server_settings", "global", globalLims, map[string]string{GlobalID: "global"}, globalCost, now, loc, globalRolled)
+	if err != nil {
+		return nil, err
+	}
+	crossings = append(crossings, sx...)
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -420,7 +442,7 @@ func idsFromSet(m map[string]bool) []string {
 // scopes that saw no writes since their window expired.
 func (s *Store) ResetBudgets(ctx context.Context) (int64, error) {
 	var total int64
-	for _, table := range []string{"api_keys", "groups"} {
+	for _, table := range []string{"api_keys", "groups", "server_settings"} {
 		tag, err := s.pool.Exec(ctx, `UPDATE `+table+` SET spend_nanos = 0, budget_reset_at = next_budget_reset(budget_type)
 			WHERE budget_type IN ('daily','monthly') AND budget_reset_at <= now()`)
 		if err != nil {

@@ -20,12 +20,18 @@ type scope struct {
 
 // scopes returns the limits to enforce, tightest first. A key-less
 // (playground) principal has no key scope: only its group's budget, RPM and TPM.
+// The server-wide cap (#31) comes last, above every group; it has a budget
+// only, so it is skipped when unlimited.
 func scopes(info *repo.AuthInfo) []scope {
 	var out []scope
 	if info.Key.ID != "" {
 		out = append(out, scope{"key", info.Key.ID, info.Key.Limits})
 	}
-	return append(out, scope{"group", info.Group.ID, info.Group.Limits})
+	out = append(out, scope{"group", info.Group.ID, info.Group.Limits})
+	if t := info.Global.BudgetType; t != "" && t != "unlimited" {
+		out = append(out, scope{"global", repo.GlobalID, info.Global})
+	}
+	return out
 }
 
 // modelAllowed: the owner may use it (group or extra grant), and the key narrows from there.

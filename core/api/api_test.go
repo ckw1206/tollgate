@@ -568,3 +568,37 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, b)
 	}
 }
+
+// #31: once the server-wide cap is reached, every key is refused with scope
+// "global", even a key and group with no budget of their own. Unlimited (the
+// default) changes nothing — every other test here runs with it.
+func TestChat_GlobalCapRefusesEveryKey(t *testing.T) {
+	e := newEnv(t, repo.KeyInput{})
+	ctx := context.Background()
+	if w := e.do("POST", "/v1/chat/completions", e.raw, chatBody); w.Code != 200 {
+		t.Fatalf("unlimited global cap: %d %s", w.Code, w.Body)
+	}
+	if _, _, err := e.store.SetGlobalBudget(ctx, "daily", 1000); err != nil {
+		t.Fatal(err)
+	}
+	e.db.Pool.Exec(ctx, `UPDATE server_settings SET spend_nanos = 1000`)
+	g, _ := e.store.GetGroupByName(ctx, "default")
+	u2, _ := e.store.CreateUser(ctx, "b@x.io", "B", "hunter22hunter22", "member", g.ID)
+	raw2, _, err := e.store.CreateKey(ctx, u2.ID, repo.KeyInput{GroupID: g.ID, BudgetType: "unlimited"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{e.raw, raw2} {
+		w := e.do("POST", "/v1/chat/completions", raw, chatBody)
+		if w.Code != 429 || errCode(t, w) != "budget_exceeded" || !strings.Contains(w.Body.String(), "global budget exceeded") {
+			t.Fatalf("over the global cap: %d %s", w.Code, w.Body)
+		}
+	}
+	// Raising the cap admits again.
+	if _, _, err := e.store.SetGlobalBudget(ctx, "daily", 1e12); err != nil {
+		t.Fatal(err)
+	}
+	if w := e.do("POST", "/v1/chat/completions", e.raw, chatBody); w.Code != 200 {
+		t.Fatalf("under the raised cap: %d %s", w.Code, w.Body)
+	}
+}

@@ -60,7 +60,7 @@ Both run in-process, starting when the server starts.
 
 | Job | Interval | What it does |
 |---|---|---|
-| `budget_reset` | 1 min | Resets key and group spend whose budget period has ended. Periods are computed in the server timezone (console → Settings). |
+| `budget_reset` | 1 min | Resets key, group and global-cap spend whose budget period has ended. Periods are computed in the server timezone (console → Settings). |
 | `spend_retention` | 24 h | Deletes `spend_logs` rows older than `SPEND_RETENTION_DAYS` (default 90). Budget counters are unaffected, and so are spend totals: the hourly rollup in `spend_hourly` is kept indefinitely, so the dashboard's charts and breakdowns still cover older ranges. Only the per-request list is limited to the retention window. The rollup starts with the upgrade that adds it (migration 014), backfilled from the logs still retained then. |
 
 Failures log `job failed` with the job name and are retried on the next tick.
